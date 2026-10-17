@@ -13,8 +13,18 @@ use App\Http\Controllers\Api\V1\Auth\ResendEmailCodeController;
 use App\Http\Controllers\Api\V1\Auth\ResetPasswordController;
 use App\Http\Controllers\Api\V1\Auth\VerifyEmailController;
 use App\Http\Controllers\Api\V1\Auth\VerifyResetCodeController;
+use App\Http\Controllers\Api\V1\BusinessController;
 use App\Http\Controllers\Api\V1\HealthController;
+use App\Http\Controllers\Api\V1\Manager\CustomerController;
+use App\Http\Controllers\Api\V1\Manager\RemittanceController as ManagerRemittanceController;
+use App\Http\Controllers\Api\V1\Manager\SendingNumberController;
+use App\Http\Controllers\Api\V1\Manager\TransactionController;
 use App\Http\Controllers\Api\V1\MeController;
+use App\Http\Controllers\Api\V1\Reports\ReportController;
+use App\Http\Controllers\Api\V1\Sender\GoalController;
+use App\Http\Controllers\Api\V1\Sender\RecipientController;
+use App\Http\Controllers\Api\V1\Sender\RemittanceController as SenderRemittanceController;
+use App\Http\Controllers\Api\V1\Work\WorkController;
 use Illuminate\Support\Facades\Route;
 
 // All routes are served under /api/v1
@@ -47,5 +57,104 @@ Route::prefix('v1')->group(function () {
     // ---- logged in AND inside a business (verified email, active account, one active business)
     Route::middleware(['auth:sanctum', 'business.context', 'throttle:api'])->group(function () {
         Route::get('/me', MeController::class);
+        Route::patch('/business', [BusinessController::class, 'update']);
+
+        // ---- Remittance Manager mode (shared by everyone in the business)
+        Route::controller(CustomerController::class)->group(function () {
+            Route::get('/customers', 'index');
+            Route::post('/customers', 'store');
+            Route::get('/customers/{id}', 'show');
+            Route::patch('/customers/{id}', 'update');
+            Route::delete('/customers/{id}', 'destroy');
+            Route::post('/customers/{id}/restore', 'restore');
+        });
+        Route::controller(TransactionController::class)->group(function () {
+            Route::get('/manager-transactions', 'index');
+            Route::post('/manager-transactions', 'store');
+            Route::get('/manager-transactions/{id}', 'show');
+            Route::patch('/manager-transactions/{id}', 'update');
+            Route::patch('/manager-transactions/{id}/status', 'status');
+            Route::delete('/manager-transactions/{id}', 'destroy');
+            Route::post('/manager-transactions/{id}/restore', 'restore');
+            Route::post('/manager-transactions/{id}/payments', 'addPayment');
+            Route::post('/manager-transactions/{id}/payments/{paymentId}/reverse', 'reversePayment');
+        });
+        Route::controller(ManagerRemittanceController::class)->group(function () {
+            Route::get('/manager-remittances', 'index');
+            Route::post('/manager-remittances', 'store');
+            Route::get('/manager-remittances/{id}', 'show');
+            Route::patch('/manager-remittances/{id}', 'update');
+            Route::delete('/manager-remittances/{id}', 'destroy');
+            Route::post('/manager-remittances/{id}/restore', 'restore');
+        });
+        Route::controller(SendingNumberController::class)->group(function () {
+            Route::get('/sending-numbers', 'index');
+            Route::post('/sending-numbers', 'store');
+            Route::patch('/sending-numbers/{id}', 'update');
+            Route::delete('/sending-numbers/{id}', 'destroy');
+        });
+
+        // ---- Sender mode (PRIVATE to the logged-in user)
+        Route::controller(RecipientController::class)->group(function () {
+            Route::get('/sender-recipients', 'index');
+            Route::post('/sender-recipients', 'store');
+            Route::get('/sender-recipients/{id}', 'show');
+            Route::patch('/sender-recipients/{id}', 'update');
+            Route::delete('/sender-recipients/{id}', 'destroy');
+            Route::post('/sender-recipients/{id}/restore', 'restore');
+        });
+        Route::controller(SenderRemittanceController::class)->group(function () {
+            Route::get('/sender-remittances', 'index');
+            Route::post('/sender-remittances', 'store');
+            Route::get('/sender-remittances/{id}', 'show');
+            Route::get('/sender-remittances/{id}/copy-info', 'copyInfo');
+            Route::patch('/sender-remittances/{id}', 'update');
+            Route::post('/sender-remittances/{id}/received', 'received');
+            Route::delete('/sender-remittances/{id}', 'destroy');
+            Route::post('/sender-remittances/{id}/restore', 'restore');
+        });
+        Route::controller(GoalController::class)->group(function () {
+            Route::get('/savings-goals', 'index');
+            Route::post('/savings-goals', 'store');
+            Route::patch('/savings-goals/{id}', 'update');
+            Route::delete('/savings-goals/{id}', 'destroy');
+        });
+
+        // ---- worker tools (PRIVATE)
+        Route::controller(WorkController::class)->prefix('work')->group(function () {
+            Route::get('/settings', 'settings');
+            Route::put('/settings', 'saveSettings');
+            Route::get('/days', 'days');
+            Route::put('/days/{date}', 'saveDay');
+            Route::delete('/days/{date}', 'deleteDay');
+            Route::get('/bonuses', 'bonuses');
+            Route::post('/bonuses', 'storeBonus');
+            Route::patch('/bonuses/{id}', 'updateBonus');
+            Route::delete('/bonuses/{id}', 'deleteBonus');
+            Route::get('/summary', 'summary');
+            Route::get('/salaries', 'salaries');
+            Route::get('/salaries/suggest', 'suggestSalary');
+            Route::post('/salaries', 'storeSalary');
+            Route::patch('/salaries/{id}', 'updateSalary');
+            Route::delete('/salaries/{id}', 'deleteSalary');
+            Route::get('/loans', 'loans');
+            Route::post('/loans', 'storeLoan');
+            Route::patch('/loans/{id}', 'updateLoan');
+            Route::delete('/loans/{id}', 'deleteLoan');
+            Route::get('/spending', 'spending');
+            Route::get('/spending/summary', 'spendingSummary');
+            Route::post('/spending', 'storeSpending');
+            Route::patch('/spending/{id}', 'updateSpending');
+            Route::delete('/spending/{id}', 'deleteSpending');
+        });
+
+        // ---- reports (business timezone; deleted records never counted)
+        Route::controller(ReportController::class)->prefix('reports')->group(function () {
+            Route::get('/manager', 'manager');
+            Route::get('/manager/monthly', 'managerMonthly');
+            Route::get('/manager/home', 'managerHome');
+            Route::get('/sender', 'sender');
+            Route::get('/sender/monthly', 'senderMonthly');
+        });
     });
 });

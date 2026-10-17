@@ -2,6 +2,8 @@
 
 namespace App\Support\Sender;
 
+use App\Support\Money\Dec;
+
 /**
  * Sender Mode money maths on bcmath strings, never floats.
  * App rule: total BDT = amount x rate. The server rounds each remittance to 2 decimals (half up)
@@ -9,42 +11,117 @@ namespace App\Support\Sender;
  */
 final class SenderCalculator
 {
+
     public static function dec(mixed $value, int $scale): string
     {
-        return number_format((float) ($value ?? 0), $scale, '.', '');
+        return Dec::of($value, $scale);
     }
 
     public static function totalBdt(mixed $amount, mixed $rate): string
     {
-        return bcadd(bcmul(self::dec($amount, 2), self::dec($rate, 4), 6), '0.005', 2);
+        return Dec::round(
+            bcmul(Dec::of($amount), Dec::of($rate, 4), 8),
+            2
+        );
     }
 
-    /**
-     * Report totals. Sent amounts and charges are kept PER CURRENCY (they cannot be added across
-     * currencies); the BDT total adds every remittance.
-     *
-     * @param iterable<array{currency: string, amount: mixed, charge: mixed, total_bdt: mixed}> $rows
-     * @return array{count: int, total_bdt: string, by_currency: array<string, array{count: int, sent: string, charges: string}>}
-     */
-    public static function summarize(iterable $rows): array
+    public static function breakdown(
+        mixed $amount,
+        mixed $rate,
+        mixed $charge,
+        string $chargeType,
+        mixed $incentivePct
+    ): array {
+        $amount = Dec::of($amount);
+        $rate = Dec::of($rate, 4);
+        $charge = Dec::of($charge);
+        $pct = Dec::of($incentivePct);
+
+        $principal = $chargeType === 'included'
+        ? bcsub($amount, $charge, 2)
+        : $amount;
+
+        $base = bcmul($principal, $rate, 8);
+        $incentive = Dec::percentOf($base, $pct);
+
+        return [
+            'principal'     => $principal,
+            'base_bdt'      => Dec::round($base, 2),
+            'incentive_bdt' => Dec::round($incentive, 2),
+            'family_bdt'    => Dec::round(bcadd($base, $incentive, 8), 2),
+            'total_cost'    => $chargeType === 'included'
+            ? $amount
+            : bcadd($amount, $charge, 2),
+        ];
+    }
+
+    public static function familyBdt(
+        mixed $amount,
+        mixed $rate,
+        mixed $charge,
+        string $chargeType,
+        mixed $incentivePct
+    ): string {
+        return self::breakdown(
+            $amount,
+            $rate,
+            $charge,
+            $chargeType,
+            $incentivePct
+        )['family_bdt'];
+    }
+
+    public static function summarize(array $rows): array
     {
-        $out = ['count' => 0, 'total_bdt' => '0.00', 'by_currency' => []];
+        $summary = [
+            'count'       => 0,
+            'total_bdt'   => '0.00',
+            'by_currency' => [],
+        ];
 
         foreach ($rows as $row) {
-            $currency = (string) $row['currency'];
+            $currency = $row['currency'];
 
-            $bucket = $out['by_currency'][$currency] ?? ['count' => 0, 'sent' => '0.00', 'charges' => '0.00'];
-            $bucket['count']++;
-            $bucket['sent']    = bcadd($bucket['sent'], self::dec($row['amount'], 2), 2);
-            $bucket['charges'] = bcadd($bucket['charges'], self::dec($row['charge'] ?? 0, 2), 2);
+            if (!isset($summary['by_currency'][$currency])) {
+                $summary['by_currency'][$currency] = [
+                    'count'   => 0,
+                    'sent'    => '0.00',
+                    'charges' => '0.00',
+                ];
+            }
 
-            $out['by_currency'][$currency] = $bucket;
-            $out['count']++;
-            $out['total_bdt'] = bcadd($out['total_bdt'], self::dec($row['total_bdt'], 2), 2);
+            $summary['count']++;
+
+            // Sum each row's already-rounded BDT amount.
+            $summary['total_bdt'] = bcadd(
+                $summary['total_bdt'],
+                Dec::of($row['total_bdt'], 2),
+                2
+            );
+
+            $group = &$summary['by_currency'][$currency];
+
+            $group['count']++;
+
+            $group['sent'] = bcadd(
+                $group['sent'],
+                Dec::of($row['amount'], 2),
+                2
+            );
+
+            $group['charges'] = bcadd(
+                $group['charges'],
+                Dec::of($row['charge'] ?? '0', 2),
+                2
+            );
+
+            unset($group);
         }
 
-        ksort($out['by_currency']);
+        // Keep the currency order predictable.
+        ksort($summary['by_currency']);
 
-        return $out;
+        return $summary;
     }
+
 }

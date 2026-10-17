@@ -22,7 +22,7 @@ class OtpServiceTest extends TestCase
         parent::setUp();
         Mail::fake();
 
-        $this->otp  = app(OtpService::class);
+        $this->otp = app(OtpService::class);
         $this->user = $this->makeUnverifiedUser();
     }
 
@@ -31,6 +31,7 @@ class OtpServiceTest extends TestCase
         $this->assertTrue($this->otp->issue($this->user, OtpCode::PURPOSE_VERIFY_EMAIL));
 
         $code = $this->lastOtp();
+
         $this->assertSame(1, OtpCode::count());
         $this->assertNotSame($code, OtpCode::first()->code_hash);
         $this->assertTrue($this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $code));
@@ -91,15 +92,29 @@ class OtpServiceTest extends TestCase
 
     public function test_the_attempt_limit_and_expiry_come_from_configuration(): void
     {
-        config(['remit.otp.max_attempts' => 2, 'remit.otp.ttl_minutes' => 1]);
+        config([
+            'remit.otp.max_attempts' => 2,
+            'remit.otp.ttl_minutes'  => 1,
+        ]);
 
         $this->otp->issue($this->user, OtpCode::PURPOSE_VERIFY_EMAIL);
-        $code  = $this->lastOtp();
+
+        $code = $this->lastOtp();
         $wrong = $code === '000000' ? '111111' : '000000';
 
-        $this->assertFalse($this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $wrong));
-        $this->assertFalse($this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $wrong));
-        $this->assertFalse($this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $code));   // locked after 2 tries
+        $this->assertFalse(
+            $this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $wrong)
+        );
+
+        $this->assertFalse(
+            $this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $wrong)
+        );
+
         $this->assertSame(2, OtpCode::first()->attempts);
+
+        // The correct code must be rejected after two failed attempts.
+        $this->assertFalse(
+            $this->otp->verify($this->user, OtpCode::PURPOSE_VERIFY_EMAIL, $code)
+        );
     }
 }

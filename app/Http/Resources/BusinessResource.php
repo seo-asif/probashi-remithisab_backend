@@ -11,12 +11,13 @@ class BusinessResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'           => $this->uuid,      // the app never sees the numeric id
-            'name'         => $this->name,
-            'phone'        => $this->phone,
-            'country_code' => $this->country_code,
-            'timezone'     => $this->timezone,
-            'status'       => $this->status->value,
+            'id'               => $this->uuid, // the app never sees the numeric id
+            'name'             => $this->name,
+            'phone'            => $this->phone,
+            'country_code'     => $this->country_code,
+            'timezone'         => $this->timezone,
+            'default_currency' => $this->default_currency,
+            'status'           => $this->status->value,
         ];
     }
 }

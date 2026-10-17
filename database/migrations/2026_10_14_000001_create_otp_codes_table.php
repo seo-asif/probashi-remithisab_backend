@@ -11,12 +11,12 @@ return new class extends Migration
         Schema::create('otp_codes', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
-            $table->string('purpose', 30);                      // verify_email | password_reset
-            $table->string('code_hash', 64);                    // HMAC of the code. The code itself is never stored.
+            $table->string('purpose', 30); // verify_email | password_reset
+            $table->string('code_hash', 64); // HMAC of the code. The code itself is never stored.
             $table->unsignedTinyInteger('attempts')->default(0);
-            $table->timestamp('expires_at');
-            $table->timestamp('consumed_at')->nullable();       // used successfully
-            $table->timestamp('invalidated_at')->nullable();    // replaced by a newer code
+            $table->dateTime('expires_at', 6);
+            $table->timestamp('consumed_at')->nullable(); // used successfully
+            $table->timestamp('invalidated_at')->nullable(); // replaced by a newer code
             $table->string('ip', 45)->nullable();
             $table->timestamps();
 
