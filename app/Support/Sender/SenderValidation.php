@@ -245,18 +245,6 @@ final class SenderValidation
                 'Incentive cannot be more than 10%.',
             ];
         }
-        if (isset($data['method']) && is_string($data['method'])) {
-            $method = trim($data['method']);
-
-            $data['method'] = match (strtolower($method)) {
-                'bkash'  => 'bKash',
-                'nagad'  => 'Nagad',
-                'rocket' => 'Rocket',
-                'bank'   => 'Bank',
-                'other'  => 'Other',
-                default  => $method,
-            };
-        }
 
         return $errors;
     }
