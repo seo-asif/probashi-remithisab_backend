@@ -1,0 +1,1 @@
+export PATH="/C/php85:$PATH"
