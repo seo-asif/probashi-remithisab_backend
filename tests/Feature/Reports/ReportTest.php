@@ -5,9 +5,7 @@ namespace Tests\Feature\Reports;
 use App\Enums\BusinessRole;
 use App\Models\ManagerRemittance;
 use App\Models\ManagerTransaction;
-use App\Support\Reports\ManagerReport;
 use App\Support\Tenancy\CurrentBusiness;
-use App\Support\Time\BusinessClock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -47,9 +45,9 @@ class ReportTest extends TestCase
         $this->assertSame('1000.00', $fjd['sent_to_bank']);
         $this->assertSame('3.00', $fjd['bank_charges']);
         $this->assertSame('52000.00', $fjd['remit_bdt']);
-        $this->assertSame('2000.00', $fjd['estimated_profit']);   // M13: 2,000, not 22,000
+        $this->assertSame('2000.00', $fjd['estimated_profit']); // M13: 2,000, not 22,000
 
-        $this->assertSame('50.00', $usd['received']);              // M11: shown side by side
+        $this->assertSame('50.00', $usd['received']); // M11: shown side by side
         $this->assertSame('-6000.00', $usd['estimated_profit']);
         $this->assertSame('-4000.00', $report['all_currencies']['estimated_profit']);
     }
@@ -58,9 +56,9 @@ class ReportTest extends TestCase
     {
         $business = $this->makeBusiness(['timezone' => 'Pacific/Fiji']);
         $this->actAs($business);
-        $c  = $this->customer();
+        $c = $this->customer();
         $now = (new \DateTimeImmutable('now', new \DateTimeZone('Pacific/Fiji')))->modify('-1 minute')->format('Y-m-d H:i');
-        $tx = $this->transaction($c['id'], ['commission' => '5', 'occurred_at' => $now]);           // M1: 26,000
+        $tx = $this->transaction($c['id'], ['commission' => '5', 'occurred_at' => $now]); // M1: 26,000
         $this->pay($tx['id'], '13000', ['paid_on' => substr($now, 0, 10)])->assertCreated();
         $this->transaction($c['id'], ['status' => 'currency_pending', 'amount' => '20', 'occurred_at' => $now]);
 
@@ -86,7 +84,7 @@ class ReportTest extends TestCase
         }
 
         $report = $this->getJson('/api/v1/reports/manager?period=all')->json('data.by_currency.0');
-        $sum = fn (string $model, string $col) => app(CurrentBusiness::class)->runAs($business, fn () => number_format((float) $model::query()->sum($col), 2, '.', ''));
+        $sum = fn(string $model, string $col) => app(CurrentBusiness::class)->runAs($business, fn() => number_format((float) $model::query()->sum($col), 2, '.', ''));
 
         $this->assertSame($sum(ManagerTransaction::class, 'obligation_bdt'), $report['bdt_obligations']);
         $this->assertSame($sum(ManagerTransaction::class, 'paid_bdt'), $report['bdt_paid']);
@@ -102,7 +100,7 @@ class ReportTest extends TestCase
     {
         $this->actAs($this->makeBusiness(['timezone' => 'Pacific/Fiji']));
         $c = $this->customer();
-        $this->transaction($c['id'], ['amount' => '10', 'rate' => '50', 'occurred_at' => '2026-10-01 00:30']);   // still 30 Sep in UTC
+        $this->transaction($c['id'], ['amount' => '10', 'rate' => '50', 'occurred_at' => '2026-10-01 00:30']); // still 30 Sep in UTC
         $this->transaction($c['id'], ['amount' => '20', 'rate' => '50', 'occurred_at' => '2026-09-30 23:30']);
 
         $months = $this->getJson('/api/v1/reports/manager/monthly?from=2026-09-01&to=2026-10-31')->json('data.months');
@@ -117,10 +115,10 @@ class ReportTest extends TestCase
         $this->actAs($business, BusinessRole::Operator);
 
         $mother = $this->recipient();
-        $self   = $this->senderRemittance();                                                                   // S1: family 25,625, cost 510
-        $this->senderRemittance(['recipient_type' => 'family', 'recipient_id' => $mother['id'], 'charge_type' => 'included']);   // S2: 25,112.50
-        $this->senderRemittance(['currency' => 'USD', 'amount' => '100', 'rate' => '120', 'charge' => '0', 'incentive_pct' => '0']);   // 12,000
-        $this->senderRemittance(['occurred_at' => '2026-08-10 10:00']);                                         // August
+        $self = $this->senderRemittance(); // S1: family 25,625, cost 510
+        $this->senderRemittance(['recipient_type' => 'family', 'recipient_id' => $mother['id'], 'charge_type' => 'included']); // S2: 25,112.50
+        $this->senderRemittance(['currency' => 'USD', 'amount' => '100', 'rate' => '120', 'charge' => '0', 'incentive_pct' => '0']); // 12,000
+        $this->senderRemittance(['occurred_at' => '2026-08-10 10:00']); // August
         $this->postJson("/api/v1/sender-remittances/{$self['id']}/received", ['received' => true])->assertOk();
 
         $r = $this->getJson('/api/v1/reports/sender?from=2026-09-01&to=2026-09-30')->assertOk()->json('data');
@@ -139,5 +137,135 @@ class ReportTest extends TestCase
 
         $this->actAs($business, BusinessRole::Owner);
         $this->getJson('/api/v1/reports/sender?period=all')->assertJsonPath('data.times_sent', 0);
+    }
+
+    public function test_sender_monthly_report_is_empty_without_records(): void
+    {
+        $business = $this->makeBusiness([
+            'timezone' => 'Pacific/Fiji',
+        ]);
+
+        $this->actAs($business);
+
+        $this->getJson(
+            '/api/v1/reports/sender/monthly?from=2026-10-01&to=2026-10-31'
+        )
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.period', 'custom')
+            ->assertJsonPath('data.from', '2026-10-01')
+            ->assertJsonPath('data.to', '2026-10-31')
+            ->assertJsonPath('data.timezone', 'Pacific/Fiji')
+            ->assertJsonCount(0, 'data.months');
+    }
+
+    public function test_sender_monthly_report_has_correct_financial_totals(): void
+    {
+        $business = $this->makeBusiness([
+            'timezone' => 'Pacific/Fiji',
+        ]);
+
+        $this->actAs($business, BusinessRole::Operator);
+
+        $mother = $this->recipient();
+
+        $self = $this->senderRemittance();
+
+        $this->senderRemittance([
+            'recipient_type' => 'family',
+            'recipient_id'   => $mother['id'],
+            'charge_type'    => 'included',
+        ]);
+
+        $this->senderRemittance([
+            'currency'      => 'USD',
+            'amount'        => '100',
+            'rate'          => '120',
+            'charge'        => '0',
+            'incentive_pct' => '0',
+        ]);
+
+        // This record must not appear in September's totals.
+        $this->senderRemittance([
+            'occurred_at' => '2026-08-10 10:00',
+        ]);
+
+        $this->postJson(
+            "/api/v1/sender-remittances/{$self['id']}/received",
+            ['received' => true]
+        )->assertOk();
+
+        $months = $this->getJson(
+            '/api/v1/reports/sender/monthly?from=2026-09-01&to=2026-09-30'
+        )
+            ->assertOk()
+            ->json('data.months');
+
+        $this->assertCount(1, $months);
+
+        $month = $months[0];
+
+        $this->assertSame('2026-09', $month['month']);
+        $this->assertSame(3, $month['times_sent']);
+        $this->assertSame('62737.50', $month['family_bdt']);
+        $this->assertSame('25625.00', $month['confirmed_bdt']);
+        $this->assertFalse($month['all_received']);
+
+        $this->assertSame(
+            ['FJD', 'USD'],
+            array_column($month['by_currency'], 'currency')
+        );
+
+        $this->assertSame([
+            'currency'      => 'FJD',
+            'times_sent'    => 2,
+            'total_sent'    => '1000.00',
+            'total_cost'    => '1010.00',
+            'bank_charges'  => '20.00',
+            'family_bdt'    => '50737.50',
+            'confirmed_bdt' => '25625.00',
+        ], $month['by_currency'][0]);
+
+        $this->assertSame([
+            'currency'      => 'USD',
+            'times_sent'    => 1,
+            'total_sent'    => '100.00',
+            'total_cost'    => '100.00',
+            'bank_charges'  => '0.00',
+            'family_bdt'    => '12000.00',
+            'confirmed_bdt' => '0.00',
+        ], $month['by_currency'][1]);
+    }
+
+    public function test_sender_monthly_report_is_private_between_users(): void
+    {
+        $business = $this->makeBusiness([
+            'timezone' => 'Pacific/Fiji',
+        ]);
+
+        // User A creates a private remittance.
+        $this->actAs($business, BusinessRole::Operator);
+
+        $this->senderRemittance([
+            'occurred_at' => '2026-09-15 10:00',
+        ]);
+
+        $url = '/api/v1/reports/sender/monthly'
+            . '?from=2026-09-01&to=2026-09-30';
+
+        $userAMonths = $this->getJson($url)
+            ->assertOk()
+            ->json('data.months');
+
+        $this->assertCount(1, $userAMonths);
+        $this->assertSame(1, $userAMonths[0]['times_sent']);
+
+        // User B belongs to the same business.
+        // Their private Sender records must remain separate.
+        $this->actAs($business, BusinessRole::Owner);
+
+        $this->getJson($url)
+            ->assertOk()
+            ->assertJsonPath('data.months', []);
     }
 }
