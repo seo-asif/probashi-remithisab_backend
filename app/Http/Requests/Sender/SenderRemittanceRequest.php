@@ -4,8 +4,6 @@ namespace App\Http\Requests\Sender;
 
 use App\Support\Sender\SenderOptions;
 use App\Support\Sender\SenderValidation;
-use App\Support\Tenancy\CurrentBusiness;
-use App\Support\Time\BusinessClock;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -28,9 +26,79 @@ class SenderRemittanceRequest extends FormRequest
 
     public function rules(): array
     {
-        $current = app(CurrentBusiness::class);
+        $partial = !$this->isMethod('post');
+        $required = $partial ? 'sometimes' : 'required';
 
-        return self::ruleSet((int) $current->id(), (int) $current->userId(), !$this->isMethod('post'));
+        return [
+            'id'             => ['sometimes', 'uuid'],
+
+            'recipient_type' => [
+                'sometimes',
+                'string',
+            ],
+            'recipient_id'   => [
+                'sometimes',
+                'nullable',
+                'uuid',
+            ],
+
+            'currency'       => [
+                $required,
+                'string',
+            ],
+            'amount'         => [
+                $required,
+            ],
+            'rate'           => [
+                $required,
+            ],
+            'method'         => [
+                $required,
+                'string',
+            ],
+            'charge_type'    => [
+                $required,
+                'string',
+            ],
+            'charge'         => [
+                'sometimes',
+                'nullable',
+            ],
+            'incentive_pct'  => [
+                'sometimes',
+                'nullable',
+            ],
+
+            'occurred_at'    => [
+                $required,
+                'string',
+            ],
+            'timezone'       => [
+                'sometimes',
+                'nullable',
+                'string',
+            ],
+            'purpose'        => [
+                'sometimes',
+                'nullable',
+                'string',
+            ],
+            'goal_id'        => [
+                'sometimes',
+                'nullable',
+                'uuid',
+            ],
+            'family_bdt'     => [
+                'sometimes',
+                'nullable',
+            ],
+            'notes'          => [
+                'sometimes',
+                'nullable',
+                'string',
+                'max:' . SenderOptions::NOTES_MAX,
+            ],
+        ];
     }
 
     /** Field rules that need no database. Used by the tests and the sync endpoint. */
@@ -64,18 +132,19 @@ class SenderRemittanceRequest extends FormRequest
 
     public function withValidator($validator): void
     {
-        $validator->after(function ($v) {
-            if ($v->errors()->isNotEmpty()) {
-                return;
-            }
+        //  $validator->after(function ($v) {
+        //   if ($v->errors()->isNotEmpty()) {
+        //        return;
+        //     }
 
-            $business = app(CurrentBusiness::class)->get();
-            $clock    = new BusinessClock($business->timezone);
+        //     $business = app(CurrentBusiness::class)->get();
+        //     $clock = new BusinessClock($business->timezone);
+//
+        //     foreach (SenderValidation::crossErrors($this->all(), $clock, new \DateTimeImmutable('now')) as $field => $message) {
+        //        $v->errors()->add($field, $message);
+        //      }
+        // });
 
-            foreach (SenderValidation::crossErrors($this->all(), $clock, new \DateTimeImmutable('now')) as $field => $message) {
-                $v->errors()->add($field, $message);
-            }
-        });
     }
 
     public function messages(): array

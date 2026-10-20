@@ -21,11 +21,11 @@ class OtpService
      */
     public function issue(User $user, string $purpose): bool
     {
-        $length   = (int) config('remit.otp.length');
-        $ttl      = (int) config('remit.otp.ttl_minutes');
+        $length = (int) config('remit.otp.length');
+        $ttl = (int) config('remit.otp.ttl_minutes');
         $cooldown = (int) config('remit.otp.resend_cooldown_seconds');
-        $code     = OtpCodec::generate($length);
-        $hash     = OtpCodec::hash($user->id, $purpose, $code, $this->key());
+        $code = OtpCodec::generate($length);
+        $hash = OtpCodec::hash($user->id, $purpose, $code, $this->key());
 
         $created = DB::transaction(function () use ($user, $purpose, $hash, $ttl, $cooldown) {
             // Lock the user row, so two simultaneous requests cannot both create a code.
@@ -47,13 +47,14 @@ class OtpService
                 ->whereNull('consumed_at')
                 ->whereNull('invalidated_at')
                 ->update(['invalidated_at' => now()]);
+            $expiresAt = now()->addMinutes($ttl);
 
             OtpCode::create([
                 'user_id'    => $user->id,
                 'purpose'    => $purpose,
                 'code_hash'  => $hash,
                 'attempts'   => 0,
-                'expires_at' => now()->addMinutes($ttl),
+                'expires_at' => $expiresAt,
                 'ip'         => request()?->ip(),
             ]);
 
@@ -61,7 +62,13 @@ class OtpService
         });
 
         if ($created) {
-            SendOtpEmail::dispatch($user->email, $user->name, $purpose, $code, $ttl);
+            SendOtpEmail::dispatch(
+                $user->email,
+                $user->name,
+                $purpose,
+                $code,
+                $ttl
+            )->afterCommit();
         }
 
         return $created;
@@ -74,7 +81,7 @@ class OtpService
     public function verify(User $user, string $purpose, string $code): bool
     {
         $maxAttempts = (int) config('remit.otp.max_attempts');
-        $key         = $this->key();
+        $key = $this->key();
 
         return DB::transaction(function () use ($user, $purpose, $code, $maxAttempts, $key) {
             $row = OtpCode::query()

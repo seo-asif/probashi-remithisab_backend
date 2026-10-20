@@ -43,7 +43,7 @@ class EmailVerificationTest extends TestCase
 
     public function test_a_wrong_code_is_refused_and_counted(): void
     {
-        $code  = $this->register();
+        $code = $this->register();
         $wrong = $code === '000000' ? '111111' : '000000';
 
         $this->verify($wrong)->assertStatus(422)->assertJsonPath('code', 'OTP_INVALID');
@@ -54,7 +54,7 @@ class EmailVerificationTest extends TestCase
 
     public function test_five_wrong_attempts_lock_the_code_even_for_the_right_answer(): void
     {
-        $code  = $this->register();
+        $code = $this->register();
         $wrong = $code === '000000' ? '111111' : '000000';
 
         for ($i = 0; $i < 5; $i++) {
@@ -84,10 +84,10 @@ class EmailVerificationTest extends TestCase
 
     public function test_a_known_email_and_an_unknown_email_get_the_same_answer(): void
     {
-        $code  = $this->register();
+        $code = $this->register();
         $wrong = $code === '000000' ? '111111' : '000000';
 
-        $known   = $this->verify($wrong);
+        $known = $this->verify($wrong);
         $unknown = $this->verify($wrong, 'nobody@example.com');
 
         $this->assertSame($known->status(), $unknown->status());
@@ -110,7 +110,9 @@ class EmailVerificationTest extends TestCase
         if ($first !== $second) {
             $this->verify($first)->assertStatus(422);
         }
+
         $this->verify($second)->assertOk();
+
     }
 
     public function test_resend_gives_the_same_answer_for_unknown_and_verified_emails_and_sends_nothing_for_them(): void
@@ -118,7 +120,7 @@ class EmailVerificationTest extends TestCase
         Mail::fake();
         $this->makeUser(['email' => 'verified@example.com']);
 
-        $known   = $this->postJson('/api/v1/auth/email/resend', ['email' => 'verified@example.com']);
+        $known = $this->postJson('/api/v1/auth/email/resend', ['email' => 'verified@example.com']);
         $unknown = $this->postJson('/api/v1/auth/email/resend', ['email' => 'nobody@example.com']);
 
         $this->assertSame($known->json(), $unknown->json());

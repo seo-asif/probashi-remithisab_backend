@@ -14,7 +14,13 @@ class Business extends Model
     use HasFactory;
 
     // status is not mass assignable: only server code changes it
-    protected $fillable = ['name', 'phone', 'country_code', 'timezone'];
+    protected $fillable = [
+        'name',
+        'phone',
+        'country_code',
+        'timezone',
+        'default_currency',
+    ];
 
     protected $attributes = ['status' => 'active'];
 

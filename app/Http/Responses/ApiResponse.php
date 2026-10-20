@@ -21,8 +21,14 @@ final class ApiResponse
         ], $status);
     }
 
-    public static function error(string $code, string $message, int $status, mixed $data = null, ?array $errors = null): JsonResponse
-    {
+    public static function error(
+        string $code,
+        string $message,
+        int $status,
+        mixed $data = null,
+        ?array $errors = null,
+        ?array $errorCodes = null
+    ): JsonResponse {
         $body = [
             'success' => false,
             'code'    => $code,
@@ -32,6 +38,10 @@ final class ApiResponse
 
         if ($errors !== null) {
             $body['errors'] = $errors;
+        }
+
+        if ($errorCodes !== null) {
+            $body['error_codes'] = $errorCodes;
         }
 
         return response()->json($body, $status);
