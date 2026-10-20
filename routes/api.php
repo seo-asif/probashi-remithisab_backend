@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\V1\Manager\RemittanceController as ManagerRemittanc
 use App\Http\Controllers\Api\V1\Manager\SendingNumberController;
 use App\Http\Controllers\Api\V1\Manager\TransactionController;
 use App\Http\Controllers\Api\V1\MeController;
+use App\Http\Controllers\Api\V1\Plan\TrialController;
 use App\Http\Controllers\Api\V1\Reports\ReportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
 use App\Http\Controllers\Api\V1\Sender\RecipientController;
@@ -57,6 +58,7 @@ Route::prefix('v1')->group(function () {
     // ---- logged in AND inside a business (verified email, active account, one active business)
     Route::middleware(['auth:sanctum', 'business.context', 'throttle:api'])->group(function () {
         Route::get('/me', MeController::class);
+         Route::post('/plan/trial', TrialController::class);
         Route::patch('/business', [BusinessController::class, 'update']);
 
         // ---- Remittance Manager mode (shared by everyone in the business)
