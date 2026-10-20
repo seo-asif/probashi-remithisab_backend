@@ -11,6 +11,7 @@ use App\Support\Manager\ManagerOptions as O;
 use App\Support\Manager\ManagerValidation;
 use App\Support\Money\Dec;
 use App\Support\Money\MoneyField;
+use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
 use App\Support\Records\RecordTime;
@@ -18,6 +19,7 @@ use App\Support\Security\IdentifierHasher;
 use App\Support\Security\IdentifierNormalizer;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
+use App\Support\Usage\EditPolicy;
 use App\Support\Validation\Reject;
 use Illuminate\Support\Facades\DB;
 
@@ -38,6 +40,7 @@ final class TransactionService
     public function __construct(
         private CurrentBusiness $current,
         private IdentifierHasher $identifierHasher,
+        private PlanQuotaService $quota,
     ) {
     }
 
@@ -56,6 +59,16 @@ final class TransactionService
         $status = $values['status'];
 
         $tx = DB::transaction(function () use ($input, $values, $status) {
+            $business = $this->current->get();
+
+            if ($business === null) {
+                throw new \LogicException(
+                    'Manager transaction creation requires a current business.'
+                );
+            }
+
+            $this->quota->consumeManagerTransaction($business);
+
             // "sent" at creation = received first, then one automatic payment for the full obligation
             $tx = ManagerTransaction::create([ ...$values, 'status' => $status === O::STATUS_SENT ? O::STATUS_RECEIVED : $status, 'paid_bdt' => 0, 'uuid' => RecordId::make($input['id'] ?? null), 'user_id' => $this->current->userId()]);
             MoneyAudit::record('created', $tx, [], MoneyAudit::values($tx));
@@ -69,30 +82,93 @@ final class TransactionService
         return [$tx->refresh(), true];
     }
 
-    public function update(ManagerTransaction $tx, array $input): ManagerTransaction
-    {
-        $values = $this->checked($input, $tx);
-        $explicit = array_key_exists('status', $input) && $input['status'] !== $tx->status;
-        $paid = Dec::of($tx->paid_bdt);
+  public function update(
+    ManagerTransaction $tx,
+    array $input,
+): ManagerTransaction {
+    $values = $this->checked($input, $tx);
 
-        // M8: the new total can never be below what is already paid
-        if (bccomp($values['obligation_bdt'], $paid, 2) < 0 && !in_array($values['status'], [O::STATUS_PENDING], true) && !($explicit && $tx->status === O::STATUS_SENT)) {
-            Reject::fail(['amount' => ['below_paid', "{$paid} BDT has already been paid. The total cannot be less than that."]]);
-        }
+    $explicit = array_key_exists('status', $input)
+        && $input['status'] !== $tx->status;
 
-        return DB::transaction(function () use ($tx, $values, $explicit) {
+    $paid = Dec::of($tx->paid_bdt);
+
+    // M8: the new total can never be below what is already paid
+    if (
+        bccomp($values['obligation_bdt'], $paid, 2) < 0
+        && !in_array(
+            $values['status'],
+            [O::STATUS_PENDING],
+            true,
+        )
+        && !(
+            $explicit
+            && $tx->status === O::STATUS_SENT
+        )
+    ) {
+        Reject::fail([
+            'amount' => [
+                'below_paid',
+                "{$paid} BDT has already been paid. The total cannot be less than that.",
+            ],
+        ]);
+    }
+
+    return DB::transaction(
+        function () use ($tx, $values, $explicit) {
             $old = MoneyAudit::values($tx);
+
             $target = $values['status'];
             unset($values['status']);
 
-            $tx->fill($values)->save();
-            MoneyAudit::record('updated', $tx, $old, MoneyAudit::values($tx));
+            $tx->fill($values);
 
-            $explicit ? $this->moveTo($tx, $target, explicit : true): $this->followMoney($tx);
+            // Preview the complete final state before writing anything.
+            $preview = MoneyAudit::values($tx);
+            $preview['status'] = $target;
+
+            $changed = EditPolicy::hasRealChange(
+                $old,
+                $preview,
+            );
+
+            if (!$changed) {
+                return $tx->refresh();
+            }
+
+            if (EditPolicy::isCounted('operator_transaction')) {
+                $business = $this->current->get();
+
+                if ($business === null) {
+                    throw new \LogicException(
+                        'Manager transaction edit requires a current business.'
+                    );
+                }
+
+                $this->quota->consumeEdit($business);
+            }
+
+            $tx->save();
+
+            MoneyAudit::record(
+                'updated',
+                $tx,
+                $old,
+                MoneyAudit::values($tx),
+            );
+
+            $explicit
+                ? $this->moveTo(
+                    $tx,
+                    $target,
+                    explicit: true,
+                )
+                : $this->followMoney($tx);
 
             return $tx->refresh();
-        });
-    }
+        }
+    );
+}
 
     /** The quick status change on the card. */
     public function changeStatus(ManagerTransaction $tx, string $status): ManagerTransaction

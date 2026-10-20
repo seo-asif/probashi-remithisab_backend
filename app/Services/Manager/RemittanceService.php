@@ -8,11 +8,13 @@ use App\Support\Manager\ManagerOptions as O;
 use App\Support\Money\Dec;
 use App\Support\Money\FinancialNumber;
 use App\Support\Money\MoneyField;
+use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
 use App\Support\Records\RecordTime;
 use App\Support\Sender\SenderOptions;
 use App\Support\Tenancy\CurrentBusiness;
+use App\Support\Usage\EditPolicy;
 use App\Support\Validation\Reject;
 use Illuminate\Support\Facades\DB;
 
@@ -22,9 +24,11 @@ use Illuminate\Support\Facades\DB;
  */
 final class RemittanceService
 {
-    public function __construct(private CurrentBusiness $current)
-    {
-    }
+   public function __construct(
+    private CurrentBusiness $current,
+    private PlanQuotaService $quota,
+) {
+}
 
     /** @return array{0: ManagerRemittance, 1: bool} */
     public function create(array $input): array
@@ -46,19 +50,50 @@ final class RemittanceService
         return [$remittance->refresh(), true];
     }
 
-    public function update(ManagerRemittance $r, array $input): ManagerRemittance
-    {
-        $values = $this->checked($input, $r);
+    public function update(
+    ManagerRemittance $r,
+    array $input,
+): ManagerRemittance {
+    $values = $this->checked($input, $r);
 
-        return DB::transaction(function () use ($r, $values) {
-            $old = MoneyAudit::values($r);
-            $r->fill($values)->save();
-            MoneyAudit::record('updated', $r, $old, MoneyAudit::values($r));
+    return DB::transaction(function () use ($r, $values) {
+        $old = MoneyAudit::values($r);
 
+        $r->fill($values);
+
+        $changed = EditPolicy::hasRealChange(
+            $old,
+            MoneyAudit::values($r),
+        );
+
+        if (!$changed) {
             return $r->refresh();
-        });
-    }
+        }
 
+        if (EditPolicy::isCounted('operator_remittance')) {
+            $business = $this->current->get();
+
+            if ($business === null) {
+                throw new \LogicException(
+                    'Manager remittance edit requires a current business.'
+                );
+            }
+
+            $this->quota->consumeEdit($business);
+        }
+
+        $r->save();
+
+        MoneyAudit::record(
+            'updated',
+            $r,
+            $old,
+            MoneyAudit::values($r),
+        );
+
+        return $r->refresh();
+    });
+}
     public function delete(ManagerRemittance $r): void
     {
         DB::transaction(function () use ($r) {
