@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\ManagerTransaction;
 use App\Support\Records\MoneyAudit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Crypt;
 use Tests\TestCase;
 
 class MoneyAuditSnapshotRegressionTest extends TestCase
@@ -17,10 +18,10 @@ class MoneyAuditSnapshotRegressionTest extends TestCase
         $tx = new ManagerTransaction();
 
         $tx->setRawAttributes([
-            'id' => 123,
+            'id'          => 123,
             'business_id' => 1,
-            'rate' => '52.00',
-            'pay_to' => 'PRIVATE_OLD_NUMBER',
+            'rate'        => '52.00',
+            'pay_to'      => Crypt::encryptString('PRIVATE_OLD_NUMBER'),
         ]);
 
         // Same snapshot pattern used by TransactionService.

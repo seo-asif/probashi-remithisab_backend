@@ -16,7 +16,7 @@ class TransactionResource extends JsonResource
     public function toArray(Request $request): array
     {
         $customer = $this->relationLoaded('customer') ? $this->customer : null;
-        $owed     = bcsub(Dec::of($this->obligation_bdt), Dec::of($this->paid_bdt), 2);
+        $owed = bcsub(Dec::of($this->obligation_bdt), Dec::of($this->paid_bdt), 2);
 
         return [
             'id'                => $this->uuid,
@@ -25,7 +25,7 @@ class TransactionResource extends JsonResource
             'amount'            => Dec::money($this->amount),
             'rate'              => Dec::money($this->rate),
             'commission'        => Dec::money($this->commission),
-            'customer_pays'     => bcadd(Dec::of($this->amount), Dec::of($this->commission), 2),   // গ্রাহক মোট দেবেন
+            'customer_pays'     => bcadd(Dec::of($this->amount), Dec::of($this->commission), 2), // গ্রাহক মোট দেবেন
             'receive_method'    => $this->receive_method,
             'pay_to'            => $this->pay_to,
             'bank'              => $this->bank,
@@ -33,9 +33,9 @@ class TransactionResource extends JsonResource
             'sending_number'    => $this->sending_number,
             'status'            => $this->status,
             'base_bdt'          => Dec::money($this->base_bdt),
-            'obligation_bdt'    => Dec::money($this->obligation_bdt),                             // পাঠাতে হবে
-            'paid_bdt'          => Dec::money($this->paid_bdt),                                   // দেওয়া হয়েছে
-            'owed_bdt'          => $owed,                                                          // এখনও দিতে হবে
+            'obligation_bdt'    => Dec::money($this->obligation_bdt), // পাঠাতে হবে
+            'paid_bdt'          => Dec::money($this->paid_bdt), // দেওয়া হয়েছে
+            'owed_bdt'          => $owed, // এখনও দিতে হবে
             'payments'          => $this->relationLoaded('payments') ? PaymentResource::collection($this->payments)->resolve($request) : null,
             'occurred_at'       => BusinessClock::utcIso($this->occurred_at),
             'timezone'          => $this->timezone,

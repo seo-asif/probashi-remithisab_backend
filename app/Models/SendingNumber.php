@@ -12,5 +12,17 @@ class SendingNumber extends Model
 {
     use BelongsToBusiness, HasPublicUuid, SoftDeletes;
 
-    protected $fillable = ['uuid', 'number', 'label'];
+    protected $fillable = [
+        'uuid',
+        'number',
+        'number_hash',
+        'label',
+    ];
+
+    protected function casts(): array
+{
+    return [
+        'number' => 'encrypted',
+    ];
+}
 }

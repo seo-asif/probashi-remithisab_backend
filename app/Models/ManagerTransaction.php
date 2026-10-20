@@ -16,13 +16,18 @@ class ManagerTransaction extends Model
 
     protected $fillable = [
         'uuid', 'user_id', 'customer_id', 'customer_name', 'currency', 'amount', 'rate', 'commission', 'receive_method',
-        'pay_to', 'bank', 'withdrawal_charge', 'sending_number', 'status', 'base_bdt', 'obligation_bdt', 'paid_bdt',
+        'pay_to', 'destination_hash', 'bank', 'withdrawal_charge', 'sending_number', 'status', 'base_bdt', 'obligation_bdt', 'paid_bdt',
         'occurred_at', 'timezone',
     ];
 
     protected function casts(): array
     {
-        return ['bank' => 'array', 'occurred_at' => 'immutable_datetime'];
+        return [
+            'pay_to'         => 'encrypted',
+            'bank'           => 'encrypted:array',
+            'sending_number' => 'encrypted',
+            'occurred_at'    => 'immutable_datetime',
+        ];
     }
 
     public function customer(): BelongsTo

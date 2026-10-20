@@ -3,6 +3,9 @@
 namespace Tests\Feature\Manager;
 
 use App\Enums\BusinessRole;
+use App\Models\SendingNumber;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -25,18 +28,143 @@ class SettingsTest extends TestCase
 
         $this->patchJson("/api/v1/sending-numbers/{$first['id']}", ['label' => 'Main'])->assertOk()->assertJsonPath('data.label', 'Main');
         $this->deleteJson("/api/v1/sending-numbers/{$first['id']}")->assertOk();
-        $this->postJson('/api/v1/sending-numbers', ['number' => '01711111111'])->assertCreated();   // free again after removal
+        $this->postJson('/api/v1/sending-numbers', ['number' => '01711111111'])->assertCreated(); // free again after removal
 
         $this->actAs($this->makeBusiness());
         $this->getJson('/api/v1/sending-numbers')->assertJsonPath('data.items', []);
     }
 
+    public function test_sending_number_hash_is_stored_from_normalized_number(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->postJson('/api/v1/sending-numbers', [
+            'number' => '017 1111 1111',
+            'label'  => 'Shop bKash',
+        ])
+            ->assertCreated()
+            ->json('data');
+
+        $number = SendingNumber::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'sending_number',
+            IdentifierNormalizer::wallet('01711111111')
+        );
+
+        $this->assertNotNull($number->number_hash);
+        $this->assertSame(64, strlen($number->number_hash));
+        $this->assertSame($expected, $number->number_hash);
+    }
+
+    public function test_equivalent_sending_number_formats_are_duplicate_by_hash(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $this->postJson('/api/v1/sending-numbers', [
+            'number' => '+8801711111111',
+        ])->assertCreated();
+
+        $this->postJson('/api/v1/sending-numbers', [
+            'number' => '01711111111',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath(
+                'error_codes.number.0',
+                'sending_number_duplicate'
+            );
+
+        $this->assertSame(
+            1,
+            SendingNumber::withoutGlobalScopes()->count()
+        );
+    }
+
+    public function test_sending_number_update_updates_hash_and_label_only_update_preserves_it(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->postJson('/api/v1/sending-numbers', [
+            'number' => '01711111111',
+            'label'  => 'Old',
+        ])
+            ->assertCreated()
+            ->json('data');
+
+        $number = SendingNumber::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $originalHash = $number->number_hash;
+
+        // A label-only update must not clear or change number_hash.
+        $this->patchJson("/api/v1/sending-numbers/{$data['id']}", [
+            'label' => 'Main',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.label', 'Main');
+
+        $number->refresh();
+
+        $this->assertSame(
+            $originalHash,
+            $number->number_hash
+        );
+
+        // Changing the number must calculate a new hash.
+        $this->patchJson("/api/v1/sending-numbers/{$data['id']}", [
+            'number' => '01911111111',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.number', '01911111111');
+
+        $number->refresh();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'sending_number',
+            IdentifierNormalizer::wallet('01911111111')
+        );
+
+        $this->assertNotSame(
+            $originalHash,
+            $number->number_hash
+        );
+
+        $this->assertSame(
+            $expected,
+            $number->number_hash
+        );
+    }
+public function test_same_sending_number_is_allowed_in_different_businesses(): void
+{
+    $businessA = $this->makeBusiness();
+    $businessB = $this->makeBusiness();
+
+    $this->actAs($businessA);
+
+    $this->postJson('/api/v1/sending-numbers', [
+        'number' => '01711111111',
+    ])->assertCreated();
+
+    $this->actAs($businessB);
+
+    $this->postJson('/api/v1/sending-numbers', [
+        'number' => '+8801711111111',
+    ])->assertCreated();
+
+    $this->assertSame(
+        2,
+        SendingNumber::withoutGlobalScopes()->count()
+    );
+}
     public function test_the_owner_changes_name_timezone_and_currency_and_times_follow(): void
     {
         $business = $this->makeBusiness(['timezone' => 'Pacific/Fiji']);
         $this->actAs($business);
         $customer = $this->customer();
-        $this->transaction($customer['id'], ['occurred_at' => '2026-09-01 05:00']);   // Fiji: 31 Aug 17:00 UTC
+        $this->transaction($customer['id'], ['occurred_at' => '2026-09-01 05:00']); // Fiji: 31 Aug 17:00 UTC
 
         $this->getJson('/api/v1/manager-transactions?from=2026-09-01&to=2026-09-01')->assertJsonPath('data.meta.total', 1);
 

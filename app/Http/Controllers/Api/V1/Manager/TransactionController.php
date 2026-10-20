@@ -15,6 +15,8 @@ use App\Support\Api\EditGuard;
 use App\Support\Api\Paging;
 use App\Support\Manager\ManagerOptions;
 use App\Support\Reports\ReportPeriod;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
 use App\Support\Validation\Reject;
@@ -34,8 +36,11 @@ use Illuminate\Http\Request;
  */
 class TransactionController extends Controller
 {
-    public function __construct(private TransactionService $service, private CurrentBusiness $current)
-    {
+    public function __construct(
+        private TransactionService $service,
+        private CurrentBusiness $current,
+        private IdentifierHasher $identifierHasher,
+    ) {
     }
 
     public function index(Request $request): JsonResponse
@@ -46,7 +51,7 @@ class TransactionController extends Controller
             $query->onlyTrashed();
         }
 
-        ReportPeriod::fromQuery($request->query(), BusinessClock::for($this->current->get()))->apply($query, 'occurred_at');
+        ReportPeriod::fromQuery($request->query(), BusinessClock::for($this->current->get()) )->apply($query, 'occurred_at');
 
         if ($request->filled('customer_id')) {
             $customer = Customer::query()->withTrashed()->where('uuid', (string) $request->query('customer_id'))->first();
@@ -64,15 +69,84 @@ class TransactionController extends Controller
             $query->where('status', '<>', ManagerOptions::STATUS_PENDING)->whereColumn('paid_bdt', '<', 'obligation_bdt');
         }
         if (is_string($q = $request->query('q')) && trim($q) !== '') {
+            $q = trim($q);
             $like = Paging::like($q);
-            $query->where(fn ($w) => $w->where('customer_name', 'like', $like)->orWhere('pay_to', 'like', $like)
-                ->orWhereHas('customer', fn ($c) => $c->withTrashed()->where(fn ($x) => $x->where('name', 'like', $like)->orWhere('phone', 'like', $like))));
+
+            $phoneHash = null;
+            $destinationHashes = [];
+
+            try {
+                $phoneHash = $this->identifierHasher->hash(
+                    'customer_phone',
+                    IdentifierNormalizer::customerPhone($q)
+                );
+            } catch (\Throwable) {
+                // Not a valid customer phone identifier.
+            }
+
+            foreach ([
+                'wallet_bkash',
+                'wallet_nagad',
+                'wallet_rocket',
+            ] as $domain) {
+                try {
+                    $destinationHashes[] = $this->identifierHasher->hash(
+                        $domain,
+                        IdentifierNormalizer::wallet($q)
+                    );
+                } catch (\Throwable) {
+                    // Not a valid wallet identifier.
+                }
+            }
+
+            try {
+                $destinationHashes[] = $this->identifierHasher->hash(
+                    'bank_account',
+                    IdentifierNormalizer::bankAccount($q)
+                );
+            } catch (\Throwable) {
+                // Not a valid bank-account identifier.
+            }
+
+            $destinationHashes = array_values(
+                array_unique($destinationHashes)
+            );
+
+            $query->where(function ($w) use (
+                $like,
+                $phoneHash,
+                $destinationHashes
+            ) {
+                // Non-sensitive snapshot name keeps partial search.
+                $w->where('customer_name', 'like', $like);
+
+                // Historical sensitive destination uses exact HMAC lookup.
+                if ($destinationHashes !== []) {
+                    $w->orWhereIn('destination_hash', $destinationHashes);
+                }
+
+                // Related customer name remains partial;
+                // customer phone uses exact HMAC lookup.
+                $w->orWhereHas('customer', function ($customer) use (
+                    $like,
+                    $phoneHash
+                ) {
+                    $customer->withTrashed()
+                        ->where(function ($match) use ($like, $phoneHash) {
+                            $match->where('name', 'like', $like);
+
+                            if ($phoneHash !== null) {
+                                $match->orWhere('phone_hash', $phoneHash);
+                            }
+                        });
+                });
+            });
         }
 
         $query->orderByDesc('occurred_at')->orderByDesc('id');
         $page = Paging::paginate($query, $request);
 
-        return ApiResponse::success(Paging::shape($page, fn ($t) => TransactionResource::make($t)->resolve($request)));
+        return ApiResponse::success(Paging::shape($page, fn($t) => TransactionResource::make($t)->resolve($request)));
     }
 
     public function store(TransactionRequest $request): JsonResponse
@@ -90,7 +164,7 @@ class TransactionController extends Controller
     public function update(TransactionRequest $request, string $id): JsonResponse
     {
         $tx = ManagerTransaction::findByUuidOrFail($id);
-        EditGuard::assertFresh($tx, $request->input('base_updated_at'), fn ($t) => $this->present($request, $t));
+        EditGuard::assertFresh($tx, $request->input('base_updated_at'), fn($t) => $this->present($request, $t));
 
         return $this->answer($request, $this->service->update($tx, $request->safe()->except(['base_updated_at', 'id'])), 'Transaction updated.');
     }
@@ -130,8 +204,8 @@ class TransactionController extends Controller
 
     public function reversePayment(Request $request, string $id, string $paymentId): JsonResponse
     {
-        $tx       = ManagerTransaction::findByUuidOrFail($id);
-        $payment  = BdtPayment::findByUuidOrFail($paymentId);
+        $tx = ManagerTransaction::findByUuidOrFail($id);
+        $payment = BdtPayment::findByUuidOrFail($paymentId);
         $reversal = $this->service->reversePayment($tx, $payment, $request->only(['id', 'note']));
 
         return ApiResponse::success([

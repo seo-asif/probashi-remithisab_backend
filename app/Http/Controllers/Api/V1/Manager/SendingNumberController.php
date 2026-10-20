@@ -7,6 +7,8 @@ use App\Http\Resources\Manager\SendingNumberResource;
 use App\Http\Responses\ApiResponse;
 use App\Models\SendingNumber;
 use App\Support\Manager\ManagerValidation;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use App\Support\Records\RecordId;
 use App\Support\Validation\Reject;
 use Closure;
@@ -59,27 +61,64 @@ class SendingNumberController extends Controller
     }
 
     private function validated(Request $request, bool $creating): array
-    {
-        if ($request->has('number')) {
-            $request->merge(['number' => ManagerValidation::cleanWallet($request->input('number'))]);
-        }
-
-        return $request->validate([
-            'number' => [$creating ? 'required' : 'sometimes', 'string', function (string $attribute, mixed $value, Closure $fail) {
-                if (is_string($value) && ($message = ManagerValidation::sendingNumberError($value)) !== null) {
-                    $fail(Reject::msg('sending_number_invalid', $message));
-                }
-            }],
-            'label'  => ['sometimes', 'nullable', 'string', 'max:40', new \App\Rules\PlainText()],
-        ], ['number.required' => Reject::msg('sending_number_required', 'Enter a sending number.')]);
+{
+    if ($request->has('number')) {
+        $request->merge([
+            'number' => ManagerValidation::cleanWallet($request->input('number')),
+        ]);
     }
+
+    $validated = $request->validate([
+        'number' => [
+            $creating ? 'required' : 'sometimes',
+            'string',
+            function (string $attribute, mixed $value, Closure $fail) {
+                if (
+                    is_string($value)
+                    && ($message = ManagerValidation::sendingNumberError($value)) !== null
+                ) {
+                    $fail(
+                        Reject::msg(
+                            'sending_number_invalid',
+                            $message
+                        )
+                    );
+                }
+            },
+        ],
+        'label' => [
+            'sometimes',
+            'nullable',
+            'string',
+            'max:40',
+            new \App\Rules\PlainText(),
+        ],
+    ], [
+        'number.required' => Reject::msg(
+            'sending_number_required',
+            'Enter a sending number.'
+        ),
+    ]);
+
+    if (array_key_exists('number', $validated)) {
+        $validated['number_hash'] = app(IdentifierHasher::class)->hash(
+            'sending_number',
+            IdentifierNormalizer::wallet($validated['number'])
+        );
+    }
+
+    return $validated;
+}
 
     private function saveUnique(SendingNumber $number): void
     {
         $duplicate = SendingNumber::query()
-            ->where('number', $number->number)
-            ->when($number->exists, fn ($q) => $q->whereKeyNot($number->id))
-            ->exists();
+    ->where('number_hash', $number->number_hash)
+    ->when(
+        $number->exists,
+        fn ($q) => $q->whereKeyNot($number->id)
+    )
+    ->exists();
 
         if ($duplicate) {
             Reject::fail(['number' => ['sending_number_duplicate', 'This sending number is already saved.']]);

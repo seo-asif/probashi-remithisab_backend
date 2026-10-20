@@ -4,6 +4,8 @@ namespace Tests\Feature\Manager;
 
 use App\Models\BdtPayment;
 use App\Models\ManagerTransaction;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -108,7 +110,7 @@ class TransactionTest extends TestCase
 
     public function test_created_as_sent_gets_one_automatic_payment_and_pending_removes_payments(): void
     {
-        $tx = $this->transaction($this->customer['id'], ['status' => 'BDT Sent']);   // display label accepted
+        $tx = $this->transaction($this->customer['id'], ['status' => 'BDT Sent']); // display label accepted
         $this->assertSame('bdt_sent', $tx['status']);
         $this->assertSame('26000.00', $tx['paid_bdt']);
         $this->assertTrue($tx['payments'][0]['auto']);
@@ -121,14 +123,14 @@ class TransactionTest extends TestCase
     public function test_a_wrong_payment_is_corrected_by_a_reversal_entry(): void
     {
         $tx = $this->transaction($this->customer['id']);
-        $p  = $this->pay($tx['id'], '26000')->json('data.payment');
+        $p = $this->pay($tx['id'], '26000')->json('data.payment');
 
         $r = $this->postJson("/api/v1/manager-transactions/{$tx['id']}/payments/{$p['id']}/reverse", ['note' => 'Typed wrong'])->assertCreated()->json('data');
         $this->assertSame('-26000.00', $r['payment']['amount_bdt']);
         $this->assertSame($p['id'], $r['payment']['reverses_id']);
         $this->assertSame('0.00', $r['transaction']['paid_bdt']);
         $this->assertSame('currency_received', $r['transaction']['status']);
-        $this->assertCount(2, $r['transaction']['payments']);   // the original stays, never edited
+        $this->assertCount(2, $r['transaction']['payments']); // the original stays, never edited
 
         $this->postJson("/api/v1/manager-transactions/{$tx['id']}/payments/{$p['id']}/reverse")->assertStatus(422)->assertJsonPath('error_codes.payment.0', 'already_reversed');
         $this->postJson("/api/v1/manager-transactions/{$tx['id']}/payments/{$r['payment']['id']}/reverse")->assertStatus(422)->assertJsonPath('error_codes.payment.0', 'cannot_reverse_reversal');
@@ -144,7 +146,7 @@ class TransactionTest extends TestCase
         $this->assertSame(1, ManagerTransaction::withoutGlobalScopes()->count());
 
         $pid = $this->uuid();
-        $tx  = ManagerTransaction::withoutGlobalScopes()->first()->uuid;
+        $tx = ManagerTransaction::withoutGlobalScopes()->first()->uuid;
         $this->pay($tx, '100', ['id' => $pid])->assertCreated();
         $this->pay($tx, '100', ['id' => $pid])->assertOk();
         $this->getJson("/api/v1/manager-transactions/{$tx}")->assertJsonPath('data.paid_bdt', '100.00');
@@ -165,13 +167,13 @@ class TransactionTest extends TestCase
     public function test_every_rejected_field_has_a_code(): void
     {
         $res = $this->postJson('/api/v1/manager-transactions', $this->txPayload($this->customer['id'], [
-            'amount' => '10000.01', 'rate' => '50.255', 'commission' => '5000', 'receive_method' => 'Bitcoin',
+            'amount'      => '10000.01', 'rate'                               => '50.255', 'commission' => '5000', 'receive_method' => 'Bitcoin',
             'occurred_at' => now()->addDay()->format('Y-m-d H:i'), 'currency' => 'XYZ',
         ]))->assertStatus(422);
 
         $this->assertSame([
             'receive_method' => ['receive_method_invalid'], 'currency' => ['currency_invalid'], 'amount' => ['amount_too_large'],
-            'rate' => ['rate_invalid'], 'occurred_at' => ['date_in_future'],
+            'rate'           => ['rate_invalid'], 'occurred_at'        => ['date_in_future'],
         ], array_intersect_key($res->json('error_codes'), array_flip(['receive_method', 'currency', 'amount', 'rate', 'occurred_at'])));
         $this->assertSame('Amount is too large (maximum 10,000).', $res->json('errors.amount.0'));
     }
@@ -219,11 +221,146 @@ class TransactionTest extends TestCase
         $this->assertNull($other['pay_to']);
     }
 
+    public function test_wallet_destination_hash_is_stored_from_the_resolved_destination(): void
+    {
+        $tx = $this->transaction($this->customer['id']);
+
+        $stored = ManagerTransaction::withoutGlobalScopes()
+            ->where('uuid', $tx['id'])
+            ->firstOrFail();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'wallet_bkash',
+            IdentifierNormalizer::wallet($tx['pay_to'])
+        );
+
+        $this->assertNotNull($stored->destination_hash);
+        $this->assertSame(64, strlen($stored->destination_hash));
+        $this->assertSame($expected, $stored->destination_hash);
+    }
+
+    public function test_bank_destination_hash_uses_account_number_not_display_label(): void
+    {
+        $tx = $this->transaction($this->customer['id'], [
+            'receive_method' => 'bank',
+            'pay_to'         => '1234-567890',
+        ]);
+
+        $stored = ManagerTransaction::withoutGlobalScopes()
+            ->where('uuid', $tx['id'])
+            ->firstOrFail();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'bank_account',
+            IdentifierNormalizer::bankAccount('1234567890')
+        );
+
+        $this->assertSame(
+            'Sonali Bank · Karim Uddin · 1234567890',
+            $tx['pay_to']
+        );
+
+        $this->assertSame(
+            '1234567890',
+            $stored->bank['account_number']
+        );
+
+        $this->assertSame(
+            $expected,
+            $stored->destination_hash
+        );
+    }
+
+    public function test_unrelated_transaction_update_preserves_destination_hash(): void
+    {
+        $tx = $this->transaction($this->customer['id']);
+
+        $stored = ManagerTransaction::withoutGlobalScopes()
+            ->where('uuid', $tx['id'])
+            ->firstOrFail();
+
+        $originalHash = $stored->destination_hash;
+
+        $this->patchJson(
+            "/api/v1/manager-transactions/{$tx['id']}",
+            ['rate' => '53']
+        )->assertOk();
+
+        $stored->refresh();
+
+        $this->assertNotNull($originalHash);
+        $this->assertSame(
+            $originalHash,
+            $stored->destination_hash
+        );
+    }
+
+    public function test_payment_method_without_destination_has_null_destination_hash(): void
+    {
+        $tx = $this->transaction($this->customer['id'], [
+            'receive_method' => 'other payment method',
+            'pay_to'         => null,
+        ]);
+
+        $stored = ManagerTransaction::withoutGlobalScopes()
+            ->where('uuid', $tx['id'])
+            ->firstOrFail();
+
+        $this->assertSame(
+            'Other Payment Method',
+            $tx['receive_method']
+        );
+
+        $this->assertNull($tx['pay_to']);
+        $this->assertNull($stored->destination_hash);
+    }
+
+    public function test_changing_destination_changes_destination_hash(): void
+    {
+        $tx = $this->transaction($this->customer['id']);
+
+        $stored = ManagerTransaction::withoutGlobalScopes()
+            ->where('uuid', $tx['id'])
+            ->firstOrFail();
+
+        $originalHash = $stored->destination_hash;
+
+        $this->patchJson(
+            "/api/v1/manager-transactions/{$tx['id']}",
+            [
+                'receive_method' => 'bank',
+                'pay_to'         => '1234-567890',
+            ]
+        )
+            ->assertOk()
+            ->assertJsonPath(
+                'data.pay_to',
+                'Sonali Bank · Karim Uddin · 1234567890'
+            );
+
+        $stored->refresh();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'bank_account',
+            IdentifierNormalizer::bankAccount('1234567890')
+        );
+
+        $this->assertNotSame(
+            $originalHash,
+            $stored->destination_hash
+        );
+
+        $this->assertSame(
+            $expected,
+            $stored->destination_hash
+        );
+    }
+
     public function test_every_money_change_is_in_the_audit_log(): void
     {
         $tx = $this->transaction($this->customer['id']);
         $this->patchJson("/api/v1/manager-transactions/{$tx['id']}", ['rate' => '53'])->assertOk();
-        $this->patchJson("/api/v1/manager-transactions/{$tx['id']}", ['rate' => '53'])->assertOk();   // no real change: no row
+        $this->patchJson("/api/v1/manager-transactions/{$tx['id']}", ['rate' => '53'])->assertOk(); // no real change: no row
         $this->deleteJson("/api/v1/manager-transactions/{$tx['id']}")->assertOk();
         $this->postJson("/api/v1/manager-transactions/{$tx['id']}/restore")->assertOk()->assertJsonPath('data.id', $tx['id']);
 
@@ -247,6 +384,52 @@ class TransactionTest extends TestCase
         $this->getJson('/api/v1/manager-transactions?owed=1')->assertJsonPath('data.meta.total', 1)->assertJsonPath('data.items.0.id', $a['id']);
         $this->getJson('/api/v1/manager-transactions?status=currency_pending')->assertJsonPath('data.meta.total', 1);
         $this->getJson('/api/v1/manager-transactions?from=2026-09-01&to=2026-09-30')->assertJsonPath('data.meta.total', 2);
+    }
+
+    public function test_search_finds_names_and_exact_sensitive_identifiers(): void
+    {
+        $walletTx = $this->transaction($this->customer['id']);
+
+        // Non-sensitive snapshot/customer names remain partially searchable.
+     $this->getJson('/api/v1/manager-transactions?q=rah')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.id', $walletTx['id']);
+
+       $this->getJson(
+    '/api/v1/manager-transactions?q=' . urlencode($this->customer['phone'])
+)
+    ->assertJsonPath('data.meta.total', 1)
+    ->assertJsonPath('data.items.0.id', $walletTx['id']);
+
+        // Historical wallet destination is exact-match through destination_hash.
+        $this->getJson('/api/v1/manager-transactions?q=' . urlencode($walletTx['pay_to']))
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.id', $walletTx['id']);
+
+        // Partial sensitive identifiers must not match.
+        $this->getJson('/api/v1/manager-transactions?q=01712345')
+            ->assertJsonPath('data.meta.total', 0);
+
+        $this->getJson('/api/v1/manager-transactions?q=99999')
+            ->assertJsonPath('data.meta.total', 0);
+            // Bank destination uses exact normalized account-number HMAC lookup.
+$bankTx = $this->transaction($this->customer['id'], [
+    'receive_method' => 'bank',
+    'pay_to' => '1234-567890',
+]);
+
+$this->getJson('/api/v1/manager-transactions?q=1234567890')
+    ->assertJsonPath('data.meta.total', 1)
+    ->assertJsonPath('data.items.0.id', $bankTx['id']);
+
+// Equivalent formatted account number normalizes to the same hash.
+$this->getJson('/api/v1/manager-transactions?q=1234-567890')
+    ->assertJsonPath('data.meta.total', 1)
+    ->assertJsonPath('data.items.0.id', $bankTx['id']);
+
+// Partial bank-account identifiers must not match.
+$this->getJson('/api/v1/manager-transactions?q=456789')
+    ->assertJsonPath('data.meta.total', 0);
     }
 
     public function test_a_transaction_of_a_deleted_customer_is_restored_only_after_the_customer(): void

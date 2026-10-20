@@ -14,6 +14,8 @@ use App\Support\Money\MoneyField;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
 use App\Support\Records\RecordTime;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
 use App\Support\Validation\Reject;
@@ -33,8 +35,10 @@ use Illuminate\Support\Facades\DB;
  */
 final class TransactionService
 {
-    public function __construct(private CurrentBusiness $current)
-    {
+    public function __construct(
+        private CurrentBusiness $current,
+        private IdentifierHasher $identifierHasher,
+    ) {
     }
 
     // ------------------------------------------------------------------ transactions
@@ -47,13 +51,13 @@ final class TransactionService
         }
 
         $input['currency'] ??= $this->current->get()->default_currency ?? 'FJD';
-        $input['status']   ??= O::STATUS_RECEIVED;
+        $input['status'] ??= O::STATUS_RECEIVED;
         $values = $this->checked($input, null);
         $status = $values['status'];
 
         $tx = DB::transaction(function () use ($input, $values, $status) {
             // "sent" at creation = received first, then one automatic payment for the full obligation
-            $tx = ManagerTransaction::create([...$values, 'status' => $status === O::STATUS_SENT ? O::STATUS_RECEIVED : $status, 'paid_bdt' => 0, 'uuid' => RecordId::make($input['id'] ?? null), 'user_id' => $this->current->userId()]);
+            $tx = ManagerTransaction::create([ ...$values, 'status' => $status === O::STATUS_SENT ? O::STATUS_RECEIVED : $status, 'paid_bdt' => 0, 'uuid' => RecordId::make($input['id'] ?? null), 'user_id' => $this->current->userId()]);
             MoneyAudit::record('created', $tx, [], MoneyAudit::values($tx));
             if ($status === O::STATUS_SENT) {
                 $this->moveTo($tx, $status, explicit: true);
@@ -67,9 +71,9 @@ final class TransactionService
 
     public function update(ManagerTransaction $tx, array $input): ManagerTransaction
     {
-        $values   = $this->checked($input, $tx);
+        $values = $this->checked($input, $tx);
         $explicit = array_key_exists('status', $input) && $input['status'] !== $tx->status;
-        $paid     = Dec::of($tx->paid_bdt);
+        $paid = Dec::of($tx->paid_bdt);
 
         // M8: the new total can never be below what is already paid
         if (bccomp($values['obligation_bdt'], $paid, 2) < 0 && !in_array($values['status'], [O::STATUS_PENDING], true) && !($explicit && $tx->status === O::STATUS_SENT)) {
@@ -77,14 +81,14 @@ final class TransactionService
         }
 
         return DB::transaction(function () use ($tx, $values, $explicit) {
-            $old    = MoneyAudit::values($tx);
+            $old = MoneyAudit::values($tx);
             $target = $values['status'];
             unset($values['status']);
 
             $tx->fill($values)->save();
             MoneyAudit::record('updated', $tx, $old, MoneyAudit::values($tx));
 
-            $explicit ? $this->moveTo($tx, $target, explicit: true) : $this->followMoney($tx);
+            $explicit ? $this->moveTo($tx, $target, explicit : true): $this->followMoney($tx);
 
             return $tx->refresh();
         });
@@ -107,7 +111,7 @@ final class TransactionService
     public function delete(ManagerTransaction $tx): void
     {
         DB::transaction(function () use ($tx) {
-            $tx->delete();   // payments stay with it, so a restore brings everything back
+            $tx->delete(); // payments stay with it, so a restore brings everything back
             MoneyAudit::record('deleted', $tx);
         });
     }
@@ -221,9 +225,9 @@ final class TransactionService
             return;
         }
 
-        $paid       = Dec::of($tx->paid_bdt);
+        $paid = Dec::of($tx->paid_bdt);
         $obligation = Dec::of($tx->obligation_bdt);
-        $target     = bccomp($paid, '0', 2) > 0 && bccomp($paid, $obligation, 2) === 0 ? O::STATUS_SENT : O::STATUS_RECEIVED;
+        $target = bccomp($paid, '0', 2) > 0 && bccomp($paid, $obligation, 2) === 0 ? O::STATUS_SENT : O::STATUS_RECEIVED;
 
         $this->setStatus($tx, $target);
     }
@@ -247,7 +251,7 @@ final class TransactionService
         }
 
         BdtPayment::query()->whereKey($removed->modelKeys())->delete();
-        MoneyAudit::record('payments_removed', $tx, [], [], ['reason' => $reason, 'payments' => $removed->map(fn ($p) => ['id' => $p->uuid, 'amount_bdt' => $p->amount_bdt])->all()]);
+        MoneyAudit::record('payments_removed', $tx, [], [], ['reason' => $reason, 'payments' => $removed->map(fn($p) => ['id' => $p->uuid, 'amount_bdt' => $p->amount_bdt])->all()]);
         $this->recalculatePaid($tx);
     }
 
@@ -277,7 +281,7 @@ final class TransactionService
     /** Validates the FINAL record and returns the columns to store, with the server's calculation. */
     private function checked(array $input, ?ManagerTransaction $stored): array
     {
-        $pick = fn (string $k) => array_key_exists($k, $input) ? $input[$k] : $stored?->{$k};
+        $pick = fn(string $k) => array_key_exists($k, $input) ? $input[$k] : $stored?->{ $k};
         $errors = [];
 
         // customer
@@ -313,9 +317,9 @@ final class TransactionService
             }
         }
 
-        $wallet     = is_string($method) && ManagerCalculator::isWallet($method);
+        $wallet = is_string($method) && ManagerCalculator::isWallet($method);
         $withdrawal = $wallet ? $pick('withdrawal_charge') : 0;
-        $sending    = $wallet ? $pick('sending_number') : null;
+        $sending = $wallet ? $pick('sending_number') : null;
 
         if (!isset($errors['amount']) && !isset($errors['commission'])) {
             $max = Dec::percentOf(Dec::of($pick('amount')), O::COMMISSION_MAX_PERCENT);
@@ -354,6 +358,44 @@ final class TransactionService
             }
         }
 
+        $destinationHash = null;
+
+        if (!isset($errors['pay_to']) && is_string($method)) {
+            $destinationHash = match ($method) {
+                'Bkash'  => is_string($payTo)
+                ? $this->identifierHasher->hash(
+                    'wallet_bkash',
+                    IdentifierNormalizer::wallet($payTo)
+                )
+                : null,
+
+                'Nagad'  => is_string($payTo)
+                ? $this->identifierHasher->hash(
+                    'wallet_nagad',
+                    IdentifierNormalizer::wallet($payTo)
+                )
+                : null,
+
+                'Rocket' => is_string($payTo)
+                ? $this->identifierHasher->hash(
+                    'wallet_rocket',
+                    IdentifierNormalizer::wallet($payTo)
+                )
+                : null,
+
+                'Bank'   => is_string($bank['account_number'] ?? null)
+                ? $this->identifierHasher->hash(
+                    'bank_account',
+                    IdentifierNormalizer::bankAccount(
+                        $bank['account_number']
+                    )
+                )
+                : null,
+
+                default  => null,
+            };
+        }
+
         // date and time: UTC plus the timezone it was entered in
         $when = $stored?->occurred_at;
         $zone = $stored?->timezone ?? $this->timezone();
@@ -377,6 +419,7 @@ final class TransactionService
             'commission'        => Dec::of($pick('commission')),
             'receive_method'    => $method,
             'pay_to'            => $payTo,
+            'destination_hash'  => $destinationHash,
             'bank'              => $bank,
             'withdrawal_charge' => $calc['withdrawal_charge'],
             'sending_number'    => $sending ?: null,
@@ -420,7 +463,7 @@ final class TransactionService
         }
 
         $number = is_string($given) ? ManagerValidation::cleanWallet($given) : null;
-        $label  = $method === 'Bkash' ? 'bKash' : $method;
+        $label = $method === 'Bkash' ? 'bKash' : $method;
         if ($same && $number === $stored->pay_to) {
             return [$stored->pay_to, null, null];
         }

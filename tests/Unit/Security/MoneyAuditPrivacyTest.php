@@ -4,7 +4,7 @@ namespace Tests\Unit\Security;
 
 use App\Models\ManagerTransaction;
 use App\Support\Records\MoneyAudit;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 class MoneyAuditPrivacyTest extends TestCase
 {

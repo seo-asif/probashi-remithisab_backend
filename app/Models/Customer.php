@@ -13,11 +13,32 @@ class Customer extends Model
 {
     use BelongsToBusiness, HasPublicUuid, SoftDeletes;
 
-    protected $fillable = ['uuid', 'user_id', 'name', 'phone', 'phone_key', 'address', 'notes', 'attention', 'bkash_numbers', 'nagad_numbers', 'rocket_numbers', 'banks'];
+    protected $fillable = [
+        'uuid',
+        'user_id',
+        'name',
+        'phone',
+
+        'phone_hash',
+        'address',
+        'notes',
+        'attention',
+        'bkash_numbers',
+        'nagad_numbers',
+        'rocket_numbers',
+        'banks',
+    ];
 
     protected function casts(): array
     {
-        return ['attention' => 'boolean', 'bkash_numbers' => 'array', 'nagad_numbers' => 'array', 'rocket_numbers' => 'array', 'banks' => 'array'];
+        return [
+            'attention'      => 'boolean',
+            'phone'          => 'encrypted',
+            'bkash_numbers'  => 'encrypted:array',
+            'nagad_numbers'  => 'encrypted:array',
+            'rocket_numbers' => 'encrypted:array',
+            'banks'          => 'encrypted:array',
+        ];
     }
 
     /** @return list<string> */

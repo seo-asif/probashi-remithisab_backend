@@ -3,8 +3,11 @@
 namespace Tests\Feature\Manager;
 
 use App\Models\Customer;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
 
@@ -23,7 +26,7 @@ class CustomerTest extends TestCase
         $this->assertSame('+8801712345678', $data['phone']);
         $this->assertSame(['01712345678'], $data['bkash_numbers']);
         $this->assertSame('1234567890', $data['banks'][0]['account_number']);
-        $this->assertSame('01712345678', Customer::withoutGlobalScopes()->first()->phone_key);
+     $this->assertNull(Customer::withoutGlobalScopes()->first()->phone_key);
     }
 
     public function test_fields_are_validated_like_the_app(): void
@@ -31,12 +34,12 @@ class CustomerTest extends TestCase
         $this->actAs($this->makeBusiness());
 
         $response = $this->postJson('/api/v1/customers', [
-            'name'          => 'R',
-            'phone'         => 'abc',
-            'address'       => '<script>x</script>',
-            'bkash_numbers' => ['0171234567', '01712345678', '01712345678'],
-            'rocket_numbers'=> ['017123456789'],
-            'banks'         => [['account_name' => 'K', 'account_number' => '12ab', 'bank_name' => '', 'routing_number' => '123']],
+            'name'           => 'R',
+            'phone'          => 'abc',
+            'address'        => '<script>x</script>',
+            'bkash_numbers'  => ['0171234567', '01712345678', '01712345678'],
+            'rocket_numbers' => ['017123456789'],
+            'banks'          => [['account_name' => 'K', 'account_number' => '12ab', 'bank_name' => '', 'routing_number' => '123']],
         ])->assertStatus(422)->assertJsonPath('code', 'VALIDATION_FAILED');
 
         $errors = $response->json('errors');
@@ -50,7 +53,7 @@ class CustomerTest extends TestCase
         $this->assertSame('Account number must contain numbers only.', $errors['banks.0.account_number'][0]);
         $this->assertSame('Bank name is required.', $errors['banks.0.bank_name'][0]);
         $this->assertSame('Routing number must be exactly 9 digits.', $errors['banks.0.routing_number'][0]);
-        $this->assertArrayNotHasKey('rocket_numbers.0', $errors);   // Rocket allows 12 digits
+        $this->assertArrayNotHasKey('rocket_numbers.0', $errors); // Rocket allows 12 digits
     }
 
     public function test_more_than_five_numbers_of_one_wallet_are_refused(): void
@@ -80,23 +83,45 @@ class CustomerTest extends TestCase
     public function test_a_recently_deleted_customer_is_offered_back_and_restored_with_the_same_id(): void
     {
         $this->actAs($this->makeBusiness());
-        $first = $this->customer(['phone' => '01712345678']);
-        $this->deleteJson("/api/v1/customers/{$first['id']}")->assertOk()->assertJsonPath('message', 'Customer deleted.');
 
-        $this->getJson('/api/v1/customers')->assertJsonPath('data.meta.total', 0);
-        $this->getJson('/api/v1/customers?trashed=only')->assertJsonPath('data.items.0.id', $first['id']);
+        $first = $this->customer([
+            'phone' => '01712345678',
+        ]);
+
+        $this->deleteJson("/api/v1/customers/{$first['id']}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Customer deleted.');
+
+        $this->getJson('/api/v1/customers')
+            ->assertJsonPath('data.meta.total', 0);
+
+        $this->getJson('/api/v1/customers?trashed=only')
+            ->assertJsonPath('data.items.0.id', $first['id']);
 
         // Cancel in the app = nothing more is sent: no replacement is created
-        $this->postJson('/api/v1/customers', ['name' => 'New Name', 'phone' => '+8801712345678'])
+        $this->postJson('/api/v1/customers', [
+            'name'  => 'New Name',
+            'phone' => '+8801712345678',
+        ])
             ->assertStatus(409)
             ->assertJsonPath('code', 'RESTORE_AVAILABLE')
             ->assertJsonPath('data.customer.id', $first['id'])
             ->assertJsonPath('data.customer.name', 'Rahim Uddin');
-        $this->assertSame(1, Customer::withoutGlobalScopes()->withTrashed()->count());
 
-        $this->postJson("/api/v1/customers/{$first['id']}/restore")->assertOk()->assertJsonPath('data.id', $first['id']);
-        $this->postJson("/api/v1/customers/{$first['id']}/restore")->assertOk();   // twice is harmless
-        $this->getJson('/api/v1/customers')->assertJsonPath('data.meta.total', 1);
+        $this->assertSame(
+            1,
+            Customer::withoutGlobalScopes()->withTrashed()->count()
+        );
+
+        $this->postJson("/api/v1/customers/{$first['id']}/restore")
+            ->assertOk()
+            ->assertJsonPath('data.id', $first['id']);
+
+        $this->postJson("/api/v1/customers/{$first['id']}/restore")
+            ->assertOk(); // twice is harmless
+
+        $this->getJson('/api/v1/customers')
+            ->assertJsonPath('data.meta.total', 1);
     }
 
     public function test_after_thirty_days_a_new_customer_can_use_the_number(): void
@@ -158,21 +183,88 @@ class CustomerTest extends TestCase
             ->assertOk()->assertJsonPath('data.notes', 'Pays on Fridays')->assertJsonPath('data.phone', '0171');
 
         $this->travel(2)->seconds();
-        $this->patchJson("/api/v1/customers/{$a['id']}", ['notes' => 'x']);   // another phone changed it
+        $this->patchJson("/api/v1/customers/{$a['id']}", ['notes' => 'x']); // another phone changed it
         $this->patchJson("/api/v1/customers/{$a['id']}", ['notes' => 'old copy', 'base_updated_at' => $a['updated_at']])
             ->assertStatus(409)->assertJsonPath('code', 'EDIT_CONFLICT')->assertJsonPath('data.current.notes', 'x');
     }
 
-    public function test_search_finds_names_and_numbers(): void
+    public function test_search_finds_names_and_exact_identifiers(): void
     {
         $this->actAs($this->makeBusiness());
-        $this->customer(['name' => 'Rahim', 'phone' => '+8801712345678', 'bkash_numbers' => ['01799999999']]);
-        $this->customer(['name' => 'Karim', 'phone' => '0155', 'bkash_numbers' => []]);
 
-        $this->getJson('/api/v1/customers?q=rah')->assertJsonPath('data.meta.total', 1);
-        $this->getJson('/api/v1/customers?q=01712345')->assertJsonPath('data.items.0.name', 'Rahim');   // matches +880 form
-        $this->getJson('/api/v1/customers?q=99999')->assertJsonPath('data.items.0.name', 'Rahim');      // wallet number
-        $this->getJson('/api/v1/customers?q=%25')->assertJsonPath('data.meta.total', 0);                 // % is literal
+        $this->customer([
+            'name'           => 'Rahim',
+            'phone'          => '+8801712345678',
+            'address'        => 'Nadi Town',
+            'bkash_numbers'  => ['01799999999'],
+            'nagad_numbers'  => ['01888888888'],
+            'rocket_numbers' => ['019777777777'],
+            'banks'          => [[
+                'bank_name'      => 'Sonali Bank',
+                'account_name'   => 'Rahim Uddin',
+                'account_number' => '1234567890',
+            ]],
+        ]);
+
+        $this->customer([
+            'name'           => 'Karim',
+            'phone'          => '0155',
+            'address'        => 'Lautoka',
+            'bkash_numbers'  => [],
+            'nagad_numbers'  => [],
+            'rocket_numbers' => [],
+            'banks'          => [],
+        ]);
+
+        // Non-sensitive text fields still support partial search.
+        $this->getJson('/api/v1/customers?q=rah')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        $this->getJson('/api/v1/customers?q=nadi')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        // Primary phone is exact-match through phone_hash.
+        $this->getJson('/api/v1/customers?q=01712345678')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        // Equivalent normalized international form resolves to the same hash.
+        $this->getJson('/api/v1/customers?q=%2B8801712345678')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        // Saved sensitive identifiers use exact HMAC lookup.
+        $this->getJson('/api/v1/customers?q=01799999999')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        $this->getJson('/api/v1/customers?q=01888888888')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        $this->getJson('/api/v1/customers?q=019777777777')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        $this->getJson('/api/v1/customers?q=1234567890')
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.name', 'Rahim');
+
+        // Partial sensitive identifiers must no longer match.
+        $this->getJson('/api/v1/customers?q=01712345')
+            ->assertJsonPath('data.meta.total', 0);
+
+        $this->getJson('/api/v1/customers?q=99999')
+            ->assertJsonPath('data.meta.total', 0);
+
+        $this->getJson('/api/v1/customers?q=456789')
+            ->assertJsonPath('data.meta.total', 0);
+
+        // LIKE wildcard characters remain literal for normal text search.
+        $this->getJson('/api/v1/customers?q=%25')
+            ->assertJsonPath('data.meta.total', 0);
     }
 
     public function test_another_business_cannot_see_use_or_discover_customers(): void
@@ -196,10 +288,10 @@ class CustomerTest extends TestCase
         // and B cannot use A's customer in a transaction
         $this->postJson('/api/v1/manager-transactions', [
             'customer_id' => $customer['id'], 'amount' => '10', 'rate' => '50', 'receive_method' => 'Cash',
-            'status' => 'bdt_sent', 'occurred_at' => '2026-09-15 10:00',
+            'status'      => 'bdt_sent', 'occurred_at' => '2026-09-15 10:00',
         ])->assertStatus(422)->assertJsonPath('error_codes.customer_id.0', 'customer_required');
 
-        app(CurrentBusiness::class)->runAs($a, fn () => $this->assertSame('Rahim Uddin', Customer::first()->name));
+        app(CurrentBusiness::class)->runAs($a, fn() => $this->assertSame('Rahim Uddin', Customer::first()->name));
     }
 
     public function test_customer_detail_has_totals_per_currency(): void
@@ -218,5 +310,208 @@ class CustomerTest extends TestCase
             ->assertJsonPath('data.summary.by_currency.1.amount', '150.00')
             ->assertJsonPath('data.summary.by_currency.1.paid_bdt', '5425.00')
             ->assertJsonPath('data.summary.by_currency.1.owed_bdt', '2700.00');
+    }
+
+    public function test_customer_create_synchronizes_identifier_lookups(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->customer([
+            'phone'          => '+8801712345678',
+            'bkash_numbers'  => ['01712345678'],
+            'nagad_numbers'  => ['01812345678'],
+            'rocket_numbers' => ['017123456789'],
+        ]);
+
+        $customer = Customer::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $rows = DB::table('customer_identifier_lookups')
+            ->where('business_id', $customer->business_id)
+            ->where('customer_id', $customer->id)
+            ->get();
+
+        // Fixture also contains one bank account.
+        $this->assertCount(4, $rows);
+
+        $hasher = app(IdentifierHasher::class);
+
+        $this->assertTrue(
+            $rows->contains(
+                fn($row) =>
+                $row->type === 'wallet_bkash'
+                && $row->identifier_hash === $hasher->hash(
+                    'wallet_bkash',
+                    IdentifierNormalizer::wallet('01712345678')
+                )
+            )
+        );
+
+        $this->assertTrue(
+            $rows->contains(
+                fn($row) =>
+                $row->type === 'bank_account'
+                && $row->identifier_hash === $hasher->hash(
+                    'bank_account',
+                    IdentifierNormalizer::bankAccount('1234567890')
+                )
+            )
+        );
+    }
+
+    public function test_customer_update_resynchronizes_identifier_lookups(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->customer([
+            'bkash_numbers' => ['01712345678'],
+        ]);
+
+        $customer = Customer::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $this->patchJson("/api/v1/customers/{$data['id']}", [
+            'bkash_numbers' => ['01912345678'],
+        ])->assertOk();
+
+        $hasher = app(IdentifierHasher::class);
+
+        $oldHash = $hasher->hash(
+            'wallet_bkash',
+            IdentifierNormalizer::wallet('01712345678')
+        );
+
+        $newHash = $hasher->hash(
+            'wallet_bkash',
+            IdentifierNormalizer::wallet('01912345678')
+        );
+
+        $this->assertFalse(
+            DB::table('customer_identifier_lookups')
+                ->where('business_id', $customer->business_id)
+                ->where('customer_id', $customer->id)
+                ->where('type', 'wallet_bkash')
+                ->where('identifier_hash', $oldHash)
+                ->exists()
+        );
+
+        $this->assertTrue(
+            DB::table('customer_identifier_lookups')
+                ->where('business_id', $customer->business_id)
+                ->where('customer_id', $customer->id)
+                ->where('type', 'wallet_bkash')
+                ->where('identifier_hash', $newHash)
+                ->exists()
+        );
+    }
+
+    public function test_customer_restore_resynchronizes_missing_identifier_lookups(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->customer([
+            'bkash_numbers' => ['01712345678'],
+        ]);
+
+        $customer = Customer::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $this->deleteJson("/api/v1/customers/{$data['id']}")
+            ->assertOk();
+
+        // Simulate lookup loss while the customer is soft deleted.
+        DB::table('customer_identifier_lookups')
+            ->where('business_id', $customer->business_id)
+            ->where('customer_id', $customer->id)
+            ->delete();
+
+        $this->assertSame(
+            0,
+            DB::table('customer_identifier_lookups')
+                ->where('business_id', $customer->business_id)
+                ->where('customer_id', $customer->id)
+                ->count()
+        );
+
+        $this->postJson("/api/v1/customers/{$data['id']}/restore")
+            ->assertOk();
+
+        $this->assertGreaterThan(
+            0,
+            DB::table('customer_identifier_lookups')
+                ->where('business_id', $customer->business_id)
+                ->where('customer_id', $customer->id)
+                ->count()
+        );
+    }
+
+    public function test_customer_phone_hash_is_stored_from_normalized_phone(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->customer([
+            'phone' => '+8801712345678',
+        ]);
+
+        $customer = Customer::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'customer_phone',
+            IdentifierNormalizer::customerPhone('01712345678')
+        );
+
+        $this->assertSame($expected, $customer->phone_hash);
+        $this->assertSame(64, strlen($customer->phone_hash));
+    }
+
+    public function test_equivalent_customer_phone_formats_have_the_same_hash(): void
+    {
+        $hasher = app(IdentifierHasher::class);
+
+        $first = $hasher->hash(
+            'customer_phone',
+            IdentifierNormalizer::customerPhone('+8801712345678')
+        );
+
+        $second = $hasher->hash(
+            'customer_phone',
+            IdentifierNormalizer::customerPhone('01712345678')
+        );
+
+        $this->assertSame($first, $second);
+    }
+
+    public function test_updating_customer_phone_updates_phone_hash(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $data = $this->customer([
+            'phone' => '01712345678',
+        ]);
+
+        $customer = Customer::withoutGlobalScopes()
+            ->where('uuid', $data['id'])
+            ->firstOrFail();
+
+        $oldHash = $customer->phone_hash;
+
+        $this->patchJson("/api/v1/customers/{$data['id']}", [
+            'phone' => '01912345678',
+        ])->assertOk();
+
+        $customer->refresh();
+
+        $expected = app(IdentifierHasher::class)->hash(
+            'customer_phone',
+            IdentifierNormalizer::customerPhone('01912345678')
+        );
+
+        $this->assertNotSame($oldHash, $customer->phone_hash);
+        $this->assertSame($expected, $customer->phone_hash);
     }
 }

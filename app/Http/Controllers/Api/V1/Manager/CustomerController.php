@@ -12,6 +12,8 @@ use App\Services\Manager\CustomerService;
 use App\Support\Api\EditGuard;
 use App\Support\Api\Paging;
 use App\Support\Money\Dec;
+use App\Support\Security\IdentifierHasher;
+use App\Support\Security\IdentifierNormalizer;
 use App\Support\Time\BusinessClock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -26,8 +28,10 @@ use Illuminate\Http\Request;
  */
 class CustomerController extends Controller
 {
-    public function __construct(private CustomerService $service)
-    {
+    public function __construct(
+        private CustomerService $service,
+        private IdentifierHasher $identifierHasher,
+    ) {
     }
 
     public function index(Request $request): JsonResponse
@@ -39,31 +43,89 @@ class CustomerController extends Controller
         }
 
         if (is_string($q = $request->query('q')) && trim($q) !== '') {
-            $like   = Paging::like($q);
-            $digits = preg_replace('/\D/', '', $q);
+            $q = trim($q);
+            $like = Paging::like($q);
 
-            $query->where(function ($w) use ($like, $digits) {
+            $phoneHash = null;
+            $identifierHashes = [];
+
+            try {
+                $phoneHash = $this->identifierHasher->hash(
+                    'customer_phone',
+                    IdentifierNormalizer::customerPhone($q)
+                );
+            } catch (\Throwable) {
+                // The query is not a valid phone identifier.
+            }
+
+            foreach ([
+                'wallet_bkash',
+                'wallet_nagad',
+                'wallet_rocket',
+            ] as $domain) {
+                try {
+                    $identifierHashes[] = $this->identifierHasher->hash(
+                        $domain,
+                        IdentifierNormalizer::wallet($q)
+                    );
+                } catch (\Throwable) {
+                    // The query is not a valid wallet identifier.
+                }
+            }
+
+            try {
+                $identifierHashes[] = $this->identifierHasher->hash(
+                    'bank_account',
+                    IdentifierNormalizer::bankAccount($q)
+                );
+            } catch (\Throwable) {
+                // The query is not a valid bank-account identifier.
+            }
+
+            $identifierHashes = array_values(
+                array_unique($identifierHashes)
+            );
+
+            $query->where(function ($w) use (
+                $like,
+                $phoneHash,
+                $identifierHashes
+            ) {
                 $w->where('name', 'like', $like)
-                  ->orWhere('phone', 'like', $like)
-                  ->orWhere('address', 'like', $like);
+                    ->orWhere('address', 'like', $like);
 
-                foreach (['bkash_numbers', 'nagad_numbers', 'rocket_numbers', 'banks'] as $json) {
-                    $w->orWhereRaw("CAST({$json} AS CHAR) LIKE ?", [$like]);
+                if ($phoneHash !== null) {
+                    $w->orWhere('phone_hash', $phoneHash);
                 }
 
-                if (strlen($digits) >= 3) {
-                    $w->orWhere('phone_key', 'like', '%' . preg_replace('/^880/', '0', $digits) . '%');
+                if ($identifierHashes !== []) {
+                    $w->orWhereExists(function ($lookup) use ($identifierHashes) {
+                        $lookup->selectRaw('1')
+                            ->from('customer_identifier_lookups')
+                            ->whereColumn(
+                                'customer_identifier_lookups.customer_id',
+                                'customers.id'
+                            )
+                            ->whereColumn(
+                                'customer_identifier_lookups.business_id',
+                                'customers.business_id'
+                            )
+                            ->whereIn(
+                                'customer_identifier_lookups.identifier_hash',
+                                $identifierHashes
+                            );
+                    });
                 }
             });
         }
 
         $request->query('sort') === 'name'
-            ? $query->orderBy('name')->orderBy('id')
-            : $query->orderByDesc('updated_at')->orderByDesc('id');
+        ? $query->orderBy('name')->orderBy('id')
+        : $query->orderByDesc('updated_at')->orderByDesc('id');
 
         $page = Paging::paginate($query, $request);
 
-        return ApiResponse::success(Paging::shape($page, fn ($c) => CustomerResource::make($c)->resolve($request)));
+        return ApiResponse::success(Paging::shape($page, fn($c) => CustomerResource::make($c)->resolve($request)));
     }
 
     public function store(CustomerRequest $request): JsonResponse
@@ -82,7 +144,7 @@ class CustomerController extends Controller
         $customer = Customer::findByUuidOrFail($id, withTrashed: true);
 
         return ApiResponse::success([
-            ...CustomerResource::make($customer)->resolve($request),
+             ...CustomerResource::make($customer)->resolve($request),
             'summary' => $this->summary($customer),
         ]);
     }
@@ -91,7 +153,7 @@ class CustomerController extends Controller
     {
         $customer = Customer::findByUuidOrFail($id);
 
-        EditGuard::assertFresh($customer, $request->input('base_updated_at'), fn ($c) => CustomerResource::make($c)->resolve($request));
+        EditGuard::assertFresh($customer, $request->input('base_updated_at'), fn($c) => CustomerResource::make($c)->resolve($request));
 
         $customer = $this->service->update($customer, $request->safe()->except('base_updated_at'));
 
@@ -129,11 +191,11 @@ class CustomerController extends Controller
         return [
             'transactions'        => (int) $rows->sum('count'),
             'last_transaction_at' => $last ? BusinessClock::utcIso(new \DateTimeImmutable($last, new \DateTimeZone('UTC'))) : null,
-            'by_currency'         => $rows->map(fn ($r) => [
-                'currency'   => $r->currency,
-                'count'      => (int) $r->count,
-                'amount'     => Dec::money($r->amount),
-                'commission' => Dec::money($r->commission),
+            'by_currency'         => $rows->map(fn($r) => [
+                'currency'       => $r->currency,
+                'count'          => (int) $r->count,
+                'amount'         => Dec::money($r->amount),
+                'commission'     => Dec::money($r->commission),
                 'obligation_bdt' => Dec::money($r->obligation_bdt),
                 'paid_bdt'       => Dec::money($r->paid_bdt),
                 'owed_bdt'       => Dec::money($r->owed_bdt),

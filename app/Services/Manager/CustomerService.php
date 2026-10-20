@@ -6,9 +6,8 @@ use App\Exceptions\ApiException;
 use App\Http\Resources\Manager\CustomerResource;
 use App\Models\Customer;
 use App\Models\ManagerTransaction;
-use App\Support\Records\RecordId;
 use App\Support\Manager\ManagerOptions;
-use App\Support\Manager\ManagerValidation;
+use App\Support\Records\RecordId;
 use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -24,36 +23,45 @@ use Illuminate\Support\Facades\DB;
  */
 final class CustomerService
 {
-    public function __construct(private CurrentBusiness $current)
-    {
+    public function __construct(
+        private CurrentBusiness $current,
+        private CustomerIdentifierLookupService $identifierLookup,
+    ) {
     }
 
     /** @return array{0: Customer, 1: bool} the customer, and true when it was newly created */
     public function create(array $data): array
     {
         if ($existing = RecordId::existing(Customer::class, $data['id'] ?? null)) {
-            return [$existing, false];   // the same record sent again (offline retry)
+            return [$existing, false]; // the same record sent again (offline retry)
         }
 
-        $key = ManagerValidation::phoneKey($data['phone'] ?? null);
+        $phoneHash = $this->identifierLookup->phoneHash(
+            $data['phone'] ?? null
+        );
 
-        if ($key !== null) {
-            $this->assertNoActiveDuplicate($key);
-            $this->assertNoRecentlyDeleted($key);
+        if ($phoneHash !== null) {
+            $this->assertNoActiveDuplicate($phoneHash);
+            $this->assertNoRecentlyDeleted($phoneHash);
         }
 
         try {
-            $customer = DB::transaction(fn () => Customer::create([
-                ...$this->attributes($data),
-                'uuid'    => RecordId::make($data['id'] ?? null),
-                'user_id' => $this->current->userId(),
-            ]));
+            $customer = DB::transaction(function () use ($data) {
+                $customer = Customer::create([
+                     ...$this->attributes($data),
+                    'uuid'    => RecordId::make($data['id'] ?? null),
+                    'user_id' => $this->current->userId(),
+                ]);
+
+                $this->identifierLookup->sync($customer);
+
+                return $customer;
+            });
         } catch (QueryException $e) {
             // another phone saved the same number at the same moment
-            if ($key !== null) {
-                $this->assertNoActiveDuplicate($key);
+            if ($phoneHash !== null) {
+                $this->assertNoActiveDuplicate($phoneHash);
             }
-            throw $e;
         }
 
         return [$customer->refresh(), true];
@@ -62,22 +70,42 @@ final class CustomerService
     public function update(Customer $customer, array $data): Customer
     {
         if (array_key_exists('phone', $data)) {
-            $key = ManagerValidation::phoneKey($data['phone']);
+            $phoneHash = $this->identifierLookup->phoneHash(
+                $data['phone']
+            );
 
-            if ($key !== null && $key !== $customer->phone_key) {
-                $this->assertNoActiveDuplicate($key, $customer->id);
+            if (
+                $phoneHash !== null
+                && $phoneHash !== $customer->phone_hash
+            ) {
+                $this->assertNoActiveDuplicate(
+                    $phoneHash,
+                    $customer->id
+                );
             }
         }
 
-        $customer->fill($this->attributes($data, partial: true));
+        try {
+            DB::transaction(function () use ($customer, $data) {
+                $customer->fill(
+                    $this->attributes($data, partial: true)
+                );
 
-        if ($customer->isDirty()) {
-            try {
-                $customer->save();
-            } catch (QueryException $e) {
-                $this->assertNoActiveDuplicate((string) $customer->phone_key, $customer->id);
-                throw $e;
+                if ($customer->isDirty()) {
+                    $customer->save();
+                }
+
+                $this->identifierLookup->sync($customer);
+            });
+        } catch (QueryException $e) {
+            if ($customer->phone_hash !== null) {
+                $this->assertNoActiveDuplicate(
+                    $customer->phone_hash,
+                    $customer->id
+                );
             }
+
+            throw $e;
         }
 
         return $customer->refresh();
@@ -98,44 +126,66 @@ final class CustomerService
     public function restore(Customer $customer): Customer
     {
         if (!$customer->trashed()) {
-            return $customer;   // already active: restoring twice is harmless
+            return $customer; // already active: restoring twice is harmless
         }
 
-        if ($customer->phone_key !== null) {
-            $this->assertNoActiveDuplicate($customer->phone_key, $customer->id);
+        if ($customer->phone_hash !== null) {
+            $this->assertNoActiveDuplicate(
+                $customer->phone_hash,
+                $customer->id
+            );
         }
 
-        DB::transaction(fn () => $customer->restore());
+        DB::transaction(function () use ($customer) {
+            $customer->restore();
+
+            $this->identifierLookup->sync($customer);
+        });
 
         return $customer->refresh();
     }
 
-    private function assertNoActiveDuplicate(string $key, ?int $ignoreId = null): void
-    {
+    private function assertNoActiveDuplicate(
+        string $phoneHash,
+        ?int $ignoreId = null
+    ): void {
         $match = Customer::query()
-            ->where('phone_key', $key)
-            ->when($ignoreId, fn ($q) => $q->whereKeyNot($ignoreId))
+            ->where('phone_hash', $phoneHash)
+            ->when(
+                $ignoreId !== null,
+                fn($q) => $q->whereKeyNot($ignoreId)
+            )
             ->first();
 
         if ($match) {
-            throw new ApiException('DUPLICATE_CUSTOMER', 'A customer with this contact number already exists: ' . $match->name, 409, [
-                'customer' => CustomerResource::brief($match),
-            ]);
+            throw new ApiException(
+                'DUPLICATE_CUSTOMER',
+                'A customer with this contact number already exists: ' . $match->name,
+                409,
+                [
+                    'customer' => CustomerResource::brief($match),
+                ]
+            );
         }
     }
 
-    private function assertNoRecentlyDeleted(string $key): void
+    private function assertNoRecentlyDeleted(string $phoneHash): void
     {
         $match = Customer::onlyTrashed()
-            ->where('phone_key', $key)
+            ->where('phone_hash', $phoneHash)
             ->where('deleted_at', '>=', now()->subDays(ManagerOptions::RESTORE_DAYS))
             ->orderByDesc('deleted_at')
             ->first();
 
         if ($match) {
-            throw new ApiException('RESTORE_AVAILABLE', 'This customer was deleted recently. Would you like to restore the previous customer and their transaction history?', 409, [
-                'customer' => CustomerResource::brief($match),
-            ]);
+            throw new ApiException(
+                'RESTORE_AVAILABLE',
+                'This customer was deleted recently. Would you like to restore the previous customer and their transaction history?',
+                409,
+                [
+                    'customer' => CustomerResource::brief($match),
+                ]
+            );
         }
     }
 
@@ -155,8 +205,10 @@ final class CustomerService
         }
 
         if (!$partial || array_key_exists('phone', $data)) {
-            $out['phone']     = $data['phone'] ?? null;
-            $out['phone_key'] = ManagerValidation::phoneKey($data['phone'] ?? null);
+            $phone = $data['phone'] ?? null;
+
+            $out['phone'] = $phone;
+            $out['phone_hash'] = $this->identifierLookup->phoneHash($phone);
         }
 
         return $out;
