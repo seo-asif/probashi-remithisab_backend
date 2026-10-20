@@ -27,12 +27,22 @@ class SenderModeTest extends TestCase
         $this->login($this->worker);
     }
 
-    public function test_recipients_allow_one_character_names_and_no_payment_fields(): void
+    public function test_recipients_validate_names_and_have_no_payment_fields(): void
     {
-        $r = $this->recipient(['name' => ' মা ', 'phone' => '+880 1811-111111', 'bkash_numbers' => ['01711111111']]);
-        $this->assertSame('মা', $r['name']);
+        $r = $this->recipient([
+            'name'          => ' আম্মা ',
+            'phone'         => '+880 1811-111111',
+            'bkash_numbers' => ['01711111111'],
+        ]);
+
+        $this->assertSame('আম্মা', $r['name']);
         $this->assertSame('+8801811111111', $r['phone']);
         $this->assertArrayNotHasKey('bkash_numbers', $r);
+        $this->postJson('/api/v1/sender-recipients', [
+            'name' => 'A',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('error_codes.name.0', 'name_length');
 
         $this->postJson('/api/v1/sender-recipients', ['name' => 'Bhai', 'phone' => '01811111111'])
             ->assertStatus(422)->assertJsonPath('error_codes.phone.0', 'phone_duplicate');
@@ -51,7 +61,7 @@ class SenderModeTest extends TestCase
 
         $mother = $this->recipient();
         $s2 = $this->senderRemittance(['recipient_id' => $mother['id'], 'recipient_type' => 'family', 'charge_type' => 'included']);
-        $this->assertSame('মা', $s2['recipient']['name']);
+        $this->assertSame('আম্মা', $s2['recipient']['name']);
         $this->assertSame('490.00', $s2['principal']);
         $this->assertSame('25112.50', $s2['family_bdt']);
         $this->assertSame('500.00', $s2['total_cost']);
@@ -59,6 +69,20 @@ class SenderModeTest extends TestCase
 
     public function test_sender_refusals_have_codes(): void
     {
+
+        $this->senderRemittance([
+            'amount'      => '100.00',
+            'charge'      => '10000.00',
+            'charge_type' => 'excluded',
+        ]);
+
+        $this->postJson('/api/v1/sender-remittances', $this->senderPayload([
+            'amount'      => '100.00',
+            'charge'      => '100000.01',
+            'charge_type' => 'excluded',
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('error_codes.charge.0', 'charge_too_large');
         $this->postJson('/api/v1/sender-remittances', $this->senderPayload(['charge' => '500', 'charge_type' => 'included']))
             ->assertStatus(422)->assertJsonPath('error_codes.charge.0', 'charge_not_less_than_amount'); // S6
         $this->senderRemittance(['amount' => '100', 'charge' => '150', 'charge_type' => 'excluded']); // S7 accepted
@@ -73,6 +97,17 @@ class SenderModeTest extends TestCase
             ->assertStatus(422)->assertJsonPath('error_codes.family_bdt.0', 'calc_mismatch');
         $this->postJson('/api/v1/sender-remittances', $this->senderPayload(['method' => 'Cash', 'purpose' => 'party']))
             ->assertStatus(422)->assertJsonPath('error_codes.method.0', 'method_invalid')->assertJsonPath('error_codes.purpose.0', 'purpose_invalid');
+        $this->postJson('/api/v1/sender-remittances', $this->senderPayload([
+            'amount' => '10000.01',
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('error_codes.amount.0', 'amount_too_large');
+
+        $this->postJson('/api/v1/sender-remittances', $this->senderPayload([
+            'rate' => '400.01',
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('error_codes.rate.0', 'rate_too_large');
     }
 
     public function test_family_got_it_is_confirmed_and_can_be_undone(): void
@@ -101,7 +136,7 @@ class SenderModeTest extends TestCase
 
         $mother = $this->recipient();
         $this->patchJson("/api/v1/sender-remittances/{$r['id']}", ['recipient_id' => $mother['id']])
-            ->assertOk()->assertJsonPath('data.recipient_type', 'family')->assertJsonPath('data.recipient.name', 'মা');
+            ->assertOk()->assertJsonPath('data.recipient_type', 'family')->assertJsonPath('data.recipient.name', 'আম্মা');
 
         $this->assertSame(2, $this->audits('sender_remittance.updated'));
     }
@@ -129,8 +164,8 @@ class SenderModeTest extends TestCase
 
         $this->getJson("/api/v1/sender-remittances/{$r['id']}/copy-info")->assertExactJson([
             'success' => true, 'code' => 'OK', 'message' => 'OK',
-            'data'    => ['recipient_name' => 'মা', 'recipient_type' => 'family', 'family_bdt' => '25625.00', 'method'                     => 'bKash',
-                'amount'                                   => '500.00', 'currency'   => 'FJD', 'occurred_at'   => '2026-09-20T06:30:00Z', 'occurred_local' => '2026-09-20 18:30'],
+            'data'    => ['recipient_name' => 'আম্মা', 'recipient_type' => 'family', 'family_bdt' => '25625.00', 'method'                     => 'bKash',
+                'amount'                                   => '500.00', 'currency'      => 'FJD', 'occurred_at'   => '2026-09-20T06:30:00Z', 'occurred_local' => '2026-09-20 18:30'],
         ]);
     }
 
@@ -140,7 +175,7 @@ class SenderModeTest extends TestCase
         $r = $this->senderRemittance(['recipient_id' => $mother['id'], 'recipient_type' => 'family']);
         $this->deleteJson("/api/v1/sender-recipients/{$mother['id']}")->assertOk();
 
-        $this->getJson("/api/v1/sender-remittances/{$r['id']}")->assertJsonPath('data.recipient.name', 'মা')->assertJsonPath('data.recipient.deleted', true);
+        $this->getJson("/api/v1/sender-remittances/{$r['id']}")->assertJsonPath('data.recipient.name', 'আম্মা')->assertJsonPath('data.recipient.deleted', true);
         $this->postJson('/api/v1/sender-remittances', $this->senderPayload(['recipient_id' => $mother['id'], 'recipient_type' => 'family']))
             ->assertStatus(422)->assertJsonPath('error_codes.recipient_id.0', 'recipient_required');
         $this->postJson("/api/v1/sender-recipients/{$mother['id']}/restore")->assertOk();
