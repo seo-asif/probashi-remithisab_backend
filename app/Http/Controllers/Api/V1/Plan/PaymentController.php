@@ -9,6 +9,7 @@ use App\Http\Resources\Plan\PaymentRequestResource;
 use App\Http\Responses\ApiResponse;
 use App\Models\PlanPaymentRequest;
 use App\Support\Api\Paging;
+use App\Support\Plans\PaymentOptionsService;
 use App\Support\Plans\PaymentRequestService;
 use App\Support\Plans\PlanPackages;
 use App\Support\Tenancy\CurrentBusiness;
@@ -49,6 +50,27 @@ final class PaymentController extends Controller
                     ->resolve($request),
             ),
         );
+    }
+
+    public function options(
+        CurrentBusiness $current,
+        PaymentOptionsService $options,
+    ): JsonResponse {
+        $business = $current->get();
+        $membership = $current->membership();
+
+        if ($business === null || $membership === null) {
+            throw new LogicException(
+                'Payment options require an active business context.'
+            );
+        }
+
+        $this->assertCanManagePayments($membership->role);
+
+        return ApiResponse::success(
+            $options->forBusiness($business),
+        );
+
     }
 
     public function store(

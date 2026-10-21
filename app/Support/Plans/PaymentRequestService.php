@@ -23,6 +23,7 @@ final class PaymentRequestService
 
     public function __construct(
         private IdentifierHasher $hasher,
+        private ReferralRenewalDiscountService $renewalDiscounts,
     ) {
     }
 
@@ -55,7 +56,7 @@ final class PaymentRequestService
             $payerNumber,
         );
 
-        if (!preg_match('/\A01[3-9]\d{8}\z/D', $payerNumber)) {
+        if (!BangladeshMobileNumber::isValid($payerNumber)) {
             throw new ApiException(
                 'PAYMENT_PAYER_NUMBER_INVALID',
                 'Enter the 11-digit Bangladesh mobile number used to make the payment.',
@@ -114,18 +115,21 @@ final class PaymentRequestService
                  */
                 $this->assertTrxUnused($trxHash);
 
-                return PlanPaymentRequest::create([
-                    'business_id' => $lockedBusiness->id,
+                $payment = PlanPaymentRequest::create([
+                    'business_id'          => $lockedBusiness->id,
                     'submitted_by_user_id' => $submittedBy->id,
-                    'beneficiary_user_id' => null,
+                    'beneficiary_user_id'  => null,
 
-                    'product_type' => PlanPaymentProduct::Unlimited,
-                    'package_months' => $months,
+                    'product_type'         => PlanPaymentProduct::Unlimited,
+                    'package_months'       => $months,
 
                     /*
-                     * Never accept this amount from Flutter.
+                     * Start from the full server-authoritative package price.
+                     *
+                     * ReferralRenewalDiscountService may reduce this by exactly
+                     * one valid 150 BDT reward inside this same transaction.
                      */
-                    'expected_amount_bdt' => PlanPackages::priceBdt(
+                    'expected_amount_bdt'  => PlanPackages::priceBdt(
                         $months,
                     ),
 
@@ -133,10 +137,16 @@ final class PaymentRequestService
                      * Model casts encrypt both sensitive plaintext
                      * values before they reach the database.
                      */
-                    'trx_id' => $trxId,
-                    'trx_id_hash' => $trxHash,
-                    'payer_number' => $payerNumber,
-                ])->refresh();
+                    'trx_id'               => $trxId,
+                    'trx_id_hash'          => $trxHash,
+                    'payer_number'         => $payerNumber,
+                ]);
+
+                return $this->renewalDiscounts
+                    ->reserveForPayment(
+                        $lockedBusiness,
+                        $payment,
+                    );
             });
         } catch (QueryException $e) {
             /*
@@ -145,8 +155,8 @@ final class PaymentRequestService
              */
             if (
                 PlanPaymentRequest::query()
-                    ->where('trx_id_hash', $trxHash)
-                    ->exists()
+                ->where('trx_id_hash', $trxHash)
+                ->exists()
             ) {
                 throw $this->duplicateTrx();
             }
@@ -166,27 +176,7 @@ final class PaymentRequestService
 
     public function normalizePayerNumber(string $value): string
     {
-        $digits = preg_replace('/\D/', '', $value) ?? '';
-
-        /*
-         * Prototype behavior:
-         * 8801712345678 -> 01712345678
-         */
-        if (str_starts_with($digits, '880')) {
-            $digits = substr($digits, 2);
-        }
-
-        /*
-         * 1712345678 -> 01712345678
-         */
-        if (
-            strlen($digits) === 10
-            && str_starts_with($digits, '1')
-        ) {
-            $digits = '0' . $digits;
-        }
-
-        return $digits;
+        return BangladeshMobileNumber::normalize($value);
     }
 
     private function assertCanSubmit(
@@ -226,7 +216,7 @@ final class PaymentRequestService
                 'You already have 2 payments waiting for checking.',
                 409,
                 [
-                    'limit' => self::MAX_PENDING,
+                    'limit'   => self::MAX_PENDING,
                     'pending' => $pending,
                 ],
             );
@@ -237,8 +227,8 @@ final class PaymentRequestService
     {
         if (
             PlanPaymentRequest::query()
-                ->where('trx_id_hash', $trxHash)
-                ->exists()
+            ->where('trx_id_hash', $trxHash)
+            ->exists()
         ) {
             throw $this->duplicateTrx();
         }

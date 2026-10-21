@@ -21,7 +21,9 @@ use App\Http\Controllers\Api\V1\Manager\SendingNumberController;
 use App\Http\Controllers\Api\V1\Manager\TransactionController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\Plan\PaymentController;
+use App\Http\Controllers\Api\V1\Plan\ReferralController;
 use App\Http\Controllers\Api\V1\Plan\TrialController;
+use App\Http\Controllers\Api\V1\Platform\PaymentProviderSettingController as PlatformPaymentProviderSettingController;
 use App\Http\Controllers\Api\V1\Platform\PlanPaymentController as PlatformPlanPaymentController;
 use App\Http\Controllers\Api\V1\Reports\ReportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
@@ -60,11 +62,20 @@ Route::prefix('v1')->group(function () {
     // ---- logged in AND inside a business (verified email, active account, one active business)
     Route::middleware(['auth:sanctum', 'business.context', 'throttle:api'])->group(function () {
         Route::get('/me', MeController::class);
+
         Route::post('/plan/trial', TrialController::class);
+
         Route::controller(PaymentController::class)->group(function () {
+            Route::get('/payments/options', 'options');
             Route::get('/payments', 'index');
             Route::post('/payments', 'store');
         });
+
+        Route::controller(ReferralController::class)->group(function () {
+            Route::get('/referrals', 'show');
+            Route::post('/referrals/claim', 'claim');
+        });
+
         Route::patch('/business', [BusinessController::class, 'update']);
 
         // ---- Remittance Manager mode (shared by everyone in the business)
@@ -178,6 +189,7 @@ Route::prefix('v1')->group(function () {
         'platform.admin',
         'throttle:api',
     ])->prefix('platform')->group(function () {
+
         Route::controller(PlatformPlanPaymentController::class)
             ->prefix('plan-payments')
             ->group(function () {
@@ -185,5 +197,22 @@ Route::prefix('v1')->group(function () {
                 Route::post('/{id}/approve', 'approve');
                 Route::post('/{id}/reject', 'reject');
             });
+
+        Route::controller(
+            PlatformPaymentProviderSettingController::class,
+        )
+            ->prefix('payment-providers')
+            ->group(function () {
+                Route::get(
+                    '/manual-bkash',
+                    'showManualBkash',
+                );
+
+                Route::put(
+                    '/manual-bkash',
+                    'updateManualBkash',
+                );
+            });
     });
+
 });

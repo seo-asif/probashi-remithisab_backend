@@ -7,9 +7,7 @@ use App\Enums\BusinessRole;
 use App\Enums\PlanPaymentProduct;
 use App\Enums\PlanPaymentStatus;
 use App\Exceptions\ApiException;
-use App\Models\Business;
 use App\Models\PlanPaymentRequest;
-use App\Models\User;
 use App\Support\Plans\PaymentRequestService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -32,9 +30,9 @@ class PaymentRequestServiceTest extends TestCase
     public function test_unlimited_packages_use_server_authoritative_prices(): void
     {
         $packages = [
-            1 => 520,
-            3 => 1490,
-            6 => 2790,
+            1  => 520,
+            3  => 1490,
+            6  => 2790,
             12 => 5200,
         ];
 
@@ -84,7 +82,7 @@ class PaymentRequestServiceTest extends TestCase
         $owner = $this->makeMember($business);
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $business,
                 $owner,
                 2,
@@ -131,7 +129,7 @@ class PaymentRequestServiceTest extends TestCase
         $owner = $this->makeMember($business);
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $business,
                 $owner,
                 1,
@@ -154,7 +152,7 @@ class PaymentRequestServiceTest extends TestCase
         $owner = $this->makeMember($business);
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $business,
                 $owner,
                 1,
@@ -228,7 +226,7 @@ class PaymentRequestServiceTest extends TestCase
         );
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $business,
                 $operator,
                 1,
@@ -258,7 +256,7 @@ class PaymentRequestServiceTest extends TestCase
         );
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $business,
                 $owner,
                 1,
@@ -297,7 +295,7 @@ class PaymentRequestServiceTest extends TestCase
         );
 
         $e = $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $business,
                 $owner,
                 6,
@@ -422,7 +420,7 @@ class PaymentRequestServiceTest extends TestCase
         );
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $businessA,
                 $ownerA,
                 3,
@@ -440,7 +438,7 @@ class PaymentRequestServiceTest extends TestCase
         $ownerB = $this->makeMember($businessB);
 
         $this->assertApiException(
-            fn () => $this->service->createUnlimited(
+            fn() => $this->service->createUnlimited(
                 $businessB,
                 $ownerB,
                 6,
