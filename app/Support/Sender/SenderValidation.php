@@ -176,7 +176,7 @@ final class SenderValidation
             $amount,
             'amount',
             'an amount',
-            '10000000'
+            SenderOptions::AMOUNT_MAX
         )) {
             $errors['amount'] = $error;
         }
@@ -186,17 +186,17 @@ final class SenderValidation
             $rate,
             'rate',
             'an exchange rate',
-            '10000'
+            SenderOptions::RATE_MAX
         )) {
             $errors['rate'] = $error;
         }
 
-        // Charge: optional, non-negative, maximum 10,000.
+        // Charge: optional, non-negative, maximum defined by SenderOptions.
         if ($error = MoneyField::check(
             $charge,
             'charge',
             'a valid charge',
-            '10000',
+            SenderOptions::CHARGE_MAX,
             required: false,
             positive: false
         )) {

@@ -8,7 +8,7 @@ use App\Support\Validation\Reject;
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 
-/** Family member name: 1 to 20 characters (see SenderOptions), letters, spaces, . - and ' only, no code. */
+/** Family member name: 2 to 20 characters (see SenderOptions), letters, spaces, . - and ' only, no code. */
 class PersonName implements ValidationRule
 {
     public function validate(string $attribute, mixed $value, Closure $fail): void

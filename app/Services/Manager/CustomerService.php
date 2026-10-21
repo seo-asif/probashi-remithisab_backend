@@ -7,6 +7,7 @@ use App\Http\Resources\Manager\CustomerResource;
 use App\Models\Customer;
 use App\Models\ManagerTransaction;
 use App\Support\Manager\ManagerOptions;
+use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\RecordId;
 use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Database\QueryException;
@@ -26,6 +27,7 @@ final class CustomerService
     public function __construct(
         private CurrentBusiness $current,
         private CustomerIdentifierLookupService $identifierLookup,
+        private PlanQuotaService $quota,
     ) {
     }
 
@@ -47,6 +49,16 @@ final class CustomerService
 
         try {
             $customer = DB::transaction(function () use ($data) {
+                $business = $this->current->get();
+
+                if ($business === null) {
+                    throw new \LogicException(
+                        'Customer creation requires a current business.'
+                    );
+                }
+
+                $this->quota->assertCustomerAvailable($business);
+
                 $customer = Customer::create([
                      ...$this->attributes($data),
                     'uuid'    => RecordId::make($data['id'] ?? null),
@@ -136,11 +148,21 @@ final class CustomerService
             );
         }
 
-        DB::transaction(function () use ($customer) {
-            $customer->restore();
+       DB::transaction(function () use ($customer) {
+    $business = $this->current->get();
 
-            $this->identifierLookup->sync($customer);
-        });
+    if ($business === null) {
+        throw new \LogicException(
+            'Customer restore requires a current business.'
+        );
+    }
+
+    $this->quota->assertCustomerAvailable($business);
+
+    $customer->restore();
+
+    $this->identifierLookup->sync($customer);
+});
 
         return $customer->refresh();
     }

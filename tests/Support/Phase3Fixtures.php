@@ -71,21 +71,21 @@ trait Phase3Fixtures
     protected function remittance(array $o = []): array
     {
         return $this->postJson('/api/v1/manager-remittances', [
-            'method' => 'Bank', 'currency' => 'FJD', 'amount' => '1000', 'rate' => '51.55', 'charge' => '0', 'charge_type' => 'excluded',
+            'method'    => 'Bank', 'currency'    => 'FJD', 'amount'      => '1000', 'rate' => '51.55', 'charge' => '0', 'charge_type' => 'excluded',
             'incentive' => true, 'incentive_pct' => '2.5', 'occurred_at' => '2026-09-16 09:00', ...$o,
         ])->assertCreated()->json('data');
     }
 
     protected function recipient(array $o = []): array
     {
-        return $this->postJson('/api/v1/sender-recipients', ['name' => 'মা', 'relationship' => 'Mother', 'phone' => '01811111111', ...$o])->assertCreated()->json('data');
+        return $this->postJson('/api/v1/sender-recipients', ['name' => 'আম্মা', 'relationship' => 'Mother', 'phone' => '01811111111', ...$o])->assertCreated()->json('data');
     }
 
     protected function senderPayload(array $o = []): array
     {
         return [
-            'recipient_type' => 'self', 'currency' => 'FJD', 'amount' => '500', 'rate' => '50', 'method' => 'Bank',
-            'charge_type' => 'excluded', 'charge' => '10', 'incentive_pct' => '2.5', 'occurred_at' => '2026-09-20 18:30', ...$o,
+            'recipient_type' => 'self', 'currency'   => 'FJD', 'amount'       => '500', 'rate'        => '50', 'method' => 'Bank',
+            'charge_type'    => 'excluded', 'charge' => '10', 'incentive_pct' => '2.5', 'occurred_at' => '2026-09-20 18:30', ...$o,
         ];
     }
 

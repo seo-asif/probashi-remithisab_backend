@@ -8,6 +8,7 @@ use App\Models\SenderRecipient;
 use App\Models\SenderRemittance;
 use App\Support\Money\Dec;
 use App\Support\Money\MoneyField;
+use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
 use App\Support\Records\RecordTime;
@@ -15,6 +16,7 @@ use App\Support\Sender\SenderCalculator;
 use App\Support\Sender\SenderOptions as O;
 use App\Support\Sender\SenderValidation;
 use App\Support\Tenancy\CurrentBusiness;
+use App\Support\Usage\EditPolicy;
 use App\Support\Validation\Reject;
 use Illuminate\Support\Facades\DB;
 
@@ -24,8 +26,10 @@ use Illuminate\Support\Facades\DB;
  */
 final class SenderService
 {
-    public function __construct(private CurrentBusiness $current)
-    {
+    public function __construct(
+        private CurrentBusiness $current,
+        private PlanQuotaService $quota,
+    ) {
     }
 
     // ------------------------------------------------------------------ recipients
@@ -37,7 +41,26 @@ final class SenderService
             return [$existing, false];
         }
 
-        $r = DB::transaction(fn () => SenderRecipient::create([...$this->recipientAttributes($data), 'uuid' => RecordId::make($data['id'] ?? null)]));
+  $r = DB::transaction(function () use ($data) {
+    $business = $this->current->get();
+    $userId = $this->current->userId();
+
+    if ($business === null || $userId === null) {
+        throw new \LogicException(
+            'Family member creation requires a current business and user.'
+        );
+    }
+
+    $this->quota->assertFamilyMemberAvailable(
+        $business,
+        $userId,
+    );
+
+    return SenderRecipient::create([
+        ...$this->recipientAttributes($data),
+        'uuid' => RecordId::make($data['id'] ?? null),
+    ]);
+});
 
         return [$r->refresh(), true];
     }
@@ -65,7 +88,23 @@ final class SenderService
             }
         }
 
-        DB::transaction(fn () => $r->restore());
+        DB::transaction(function () use ($r) {
+    $business = $this->current->get();
+    $userId = $this->current->userId();
+
+    if ($business === null || $userId === null) {
+        throw new \LogicException(
+            'Family member restore requires a current business and user.'
+        );
+    }
+
+    $this->quota->assertFamilyMemberAvailable(
+        $business,
+        $userId,
+    );
+
+    $r->restore();
+});
 
         return $r->refresh();
     }
@@ -80,8 +119,8 @@ final class SenderService
         }
         if (!$partial || array_key_exists('phone', $data)) {
             $phone = $data['phone'] ?? null;
-            $key   = is_string($phone) ? SenderValidation::phoneKey($phone) : '';
-            $out['phone']            = $phone ?: null;
+            $key = is_string($phone) ? SenderValidation::phoneKey($phone) : '';
+            $out['phone'] = $phone ?: null;
             $out['phone_normalized'] = $key !== '' ? $key : null;
         }
 
@@ -100,8 +139,32 @@ final class SenderService
         $values = $this->remittanceValues($input, null);
 
         $r = DB::transaction(function () use ($input, $values) {
-            $r = SenderRemittance::create([...$values, 'uuid' => RecordId::make($input['id'] ?? null), 'received' => false]);
-            MoneyAudit::record('created', $r, [], MoneyAudit::values($r));
+            $business = $this->current->get();
+            $userId = $this->current->userId();
+
+            if ($business === null || $userId === null) {
+                throw new \LogicException(
+                    'Sender remittance creation requires a current business and user.'
+                );
+            }
+
+            $this->quota->consumeSenderRemittance(
+                $business,
+                $userId,
+            );
+
+            $r = SenderRemittance::create([
+                 ...$values,
+                'uuid'     => RecordId::make($input['id'] ?? null),
+                'received' => false,
+            ]);
+
+            MoneyAudit::record(
+                'created',
+                $r,
+                [],
+                MoneyAudit::values($r)
+            );
 
             return $r;
         });
@@ -109,18 +172,50 @@ final class SenderService
         return [$r->refresh(), true];
     }
 
-    public function updateRemittance(SenderRemittance $r, array $input): SenderRemittance
-    {
-        $values = $this->remittanceValues($input, $r);
+   public function updateRemittance(
+    SenderRemittance $r,
+    array $input,
+): SenderRemittance {
+    $values = $this->remittanceValues($input, $r);
 
-        return DB::transaction(function () use ($r, $values) {
-            $old = MoneyAudit::values($r);
-            $r->fill($values)->save();
-            MoneyAudit::record('updated', $r, $old, MoneyAudit::values($r));
+    return DB::transaction(function () use ($r, $values) {
+        $old = MoneyAudit::values($r);
 
+        $r->fill($values);
+
+        $changed = EditPolicy::hasRealChange(
+            $old,
+            MoneyAudit::values($r),
+        );
+
+        if (!$changed) {
             return $r->refresh();
-        });
-    }
+        }
+
+        if (EditPolicy::isCounted('sender_remittance')) {
+            $business = $this->current->get();
+
+            if ($business === null) {
+                throw new \LogicException(
+                    'Sender remittance edit requires a current business.'
+                );
+            }
+
+            $this->quota->consumeEdit($business);
+        }
+
+        $r->save();
+
+        MoneyAudit::record(
+            'updated',
+            $r,
+            $old,
+            MoneyAudit::values($r),
+        );
+
+        return $r->refresh();
+    });
+}
 
     /** "ওরা পেয়েছে ✓": the family confirmed. Sending false undoes it. */
     public function markReceived(SenderRemittance $r, bool $received): SenderRemittance
@@ -165,7 +260,7 @@ final class SenderService
             $input['recipient_type'] = O::RECIPIENT_FAMILY;
         }
 
-        $pick   = fn (string $k, mixed $d = null) => array_key_exists($k, $input) ? $input[$k] : ($stored?->{$k} ?? $d);
+        $pick = fn(string $k, mixed $d = null) => array_key_exists($k, $input) ? $input[$k] : ($stored?->{ $k} ?? $d);
         $errors = [];
 
         $type = $pick('recipient_type');
@@ -181,7 +276,7 @@ final class SenderService
                     $errors['recipient_id'] = ['recipient_required', 'Select a saved family member or recipient.'];
                 }
             } else {
-                $recipient = $stored->recipient;   // unchanged (still readable if deleted later)
+                $recipient = $stored->recipient; // unchanged (still readable if deleted later)
             }
         } elseif ($type === O::RECIPIENT_SELF && !empty($input['recipient_id'])) {
             $errors['recipient_id'] = ['recipient_not_allowed', 'Myself needs no family member.'];
@@ -269,9 +364,9 @@ final class SenderService
             return [$existing, false];
         }
 
-        $name   = array_key_exists('name', $input) ? (is_string($input['name']) ? trim($input['name']) : null) : $goal?->name;
+        $name = array_key_exists('name', $input) ? (is_string($input['name']) ? trim($input['name']) : null) : $goal?->name;
         $target = array_key_exists('target_bdt', $input) ? $input['target_bdt'] : $goal?->target_bdt;
-        $date   = array_key_exists('target_date', $input) ? ($input['target_date'] ?: null) : $goal?->target_date?->format('Y-m-d');
+        $date = array_key_exists('target_date', $input) ? ($input['target_date'] ?: null): $goal?->target_date?->format('Y-m-d');
         $errors = [];
 
         if ($name === null || $name === '') {
@@ -305,7 +400,7 @@ final class SenderService
     public function deleteGoal(SavingsGoal $goal): void
     {
         DB::transaction(function () use ($goal) {
-            SenderRemittance::withTrashed()->where('goal_id', $goal->id)->update(['goal_id' => null]);   // the app's rule
+            SenderRemittance::withTrashed()->where('goal_id', $goal->id)->update(['goal_id' => null]); // the app's rule
             $goal->delete();
         });
     }
@@ -314,7 +409,7 @@ final class SenderService
     public function goalProgress(SavingsGoal $goal): array
     {
         $saved = Dec::of((string) SenderRemittance::query()->where('goal_id', $goal->id)->sum('family_bdt'));
-        $left  = bcsub(Dec::of($goal->target_bdt), $saved, 2);
+        $left = bcsub(Dec::of($goal->target_bdt), $saved, 2);
 
         return ['saved_bdt' => $saved, 'left_bdt' => bccomp($left, '0', 2) > 0 ? $left : '0.00', 'reached' => bccomp($saved, Dec::of($goal->target_bdt), 2) >= 0];
     }

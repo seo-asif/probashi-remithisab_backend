@@ -27,7 +27,7 @@ class SenderValidationTest extends TestCase
         $this->assertSame(1, preg_match($regex, '01712345678'));
         $this->assertSame(1, preg_match($regex, str_repeat('1', 18)));
         $this->assertSame(0, preg_match($regex, str_repeat('1', 19)));
-        $this->assertSame(0, preg_match($regex, '017-123'));          // dashes are removed before the check, not by it
+        $this->assertSame(0, preg_match($regex, '017-123')); // dashes are removed before the check, not by it
         $this->assertSame(0, preg_match($regex, 'abc'));
         $this->assertSame(0, preg_match($regex, '+'));
     }
@@ -43,7 +43,7 @@ class SenderValidationTest extends TestCase
     public function test_charge_cannot_exceed_the_amount_sent(): void
     {
         $clock = new BusinessClock('+12:00');
-        $now   = new DateTimeImmutable('2026-10-12T10:00:00Z');
+        $now = new DateTimeImmutable('2026-10-12T10:00:00Z');
 
         $this->assertSame([], SenderValidation::crossErrors(['amount' => '100.00', 'charge' => '100.00'], $clock, $now));
         $this->assertSame([], SenderValidation::crossErrors(['amount' => '100.00', 'charge' => null], $clock, $now));
@@ -53,17 +53,42 @@ class SenderValidationTest extends TestCase
 
     public function test_the_date_cannot_be_in_the_future_in_the_business_timezone(): void
     {
-        $now = new DateTimeImmutable('2026-10-12T20:00:00Z');   // already 13 Oct 08:00 at +12, still 13 Oct 02:00 at +06
+        $now = new DateTimeImmutable('2026-10-12T20:00:00Z'); // already 13 Oct 08:00 at +12, still 13 Oct 02:00 at +06
 
-        $fiji       = new BusinessClock('+12:00');
+        $fiji = new BusinessClock('+12:00');
         $bangladesh = new BusinessClock('+06:00');
 
         $this->assertSame([], SenderValidation::crossErrors(['remit_date' => '2026-10-13'], $fiji, $now));
         $this->assertSame([], SenderValidation::crossErrors(['remit_date' => '2026-10-12'], $fiji, $now));
         $this->assertSame(['remit_date'], array_keys(SenderValidation::crossErrors(['remit_date' => '2026-10-14'], $fiji, $now)));
 
-        $late = new DateTimeImmutable('2026-10-12T10:00:00Z');  // 12 Oct 22:00 at +12, 12 Oct 16:00 at +06
+        $late = new DateTimeImmutable('2026-10-12T10:00:00Z'); // 12 Oct 22:00 at +12, 12 Oct 16:00 at +06
         $this->assertSame([], SenderValidation::crossErrors(['remit_date' => '2026-10-12'], $bangladesh, $late));
         $this->assertSame(['remit_date'], array_keys(SenderValidation::crossErrors(['remit_date' => '2026-10-13'], $bangladesh, $late)));
+    }
+
+    public function test_sender_amount_and_rate_match_prototype_limits(): void
+    {
+        $atLimit = SenderValidation::moneyErrors([
+            'amount'        => '10000.00',
+            'rate'          => '400.00',
+            'charge'        => '0',
+            'charge_type'   => 'included',
+            'incentive_pct' => '0',
+        ]);
+
+        $this->assertArrayNotHasKey('amount', $atLimit);
+        $this->assertArrayNotHasKey('rate', $atLimit);
+
+        $overLimit = SenderValidation::moneyErrors([
+            'amount'        => '10000.01',
+            'rate'          => '400.01',
+            'charge'        => '0',
+            'charge_type'   => 'included',
+            'incentive_pct' => '0',
+        ]);
+
+        $this->assertArrayHasKey('amount', $overLimit);
+        $this->assertArrayHasKey('rate', $overLimit);
     }
 }
