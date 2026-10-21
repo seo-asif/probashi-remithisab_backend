@@ -531,6 +531,112 @@ class ReferralApiTest extends TestCase
             0,
         );
     }
+    public function test_client_cannot_tamper_with_referral_claim_state(): void
+{
+    $realInviter = $this->makeBusiness([
+        'name' => 'Real Inviter',
+    ]);
+
+    $fakeInviter = $this->makeBusiness([
+        'name' => 'Fake Inviter',
+    ]);
+
+    $profile = $this->referrals->profileFor(
+        $realInviter,
+    );
+
+    $referred = $this->makeBusiness([
+        'name' => 'Referred Business',
+    ]);
+
+    $this->actAs(
+        $referred,
+        BusinessRole::Owner,
+    );
+
+    $this->postJson(
+        '/api/v1/referrals/claim',
+        [
+            'invite_code' =>
+                $profile->invite_code,
+
+            /*
+             * Malicious/untrusted fields.
+             *
+             * The server must ignore all of these and derive
+             * referral state from authenticated context and the
+             * authoritative invite-code record.
+             */
+            'inviter_business_id' =>
+                $fakeInviter->id,
+
+            'referred_business_id' =>
+                $fakeInviter->id,
+
+            'status' =>
+                'qualified',
+
+            'qualifying_payment_request_id' =>
+                999999,
+
+            'qualification_sequence' =>
+                1,
+
+            'qualified_at' =>
+                now()->toISOString(),
+        ],
+    )
+        ->assertOk()
+        ->assertJsonPath(
+            'data.referral.status',
+            'claimed',
+        )
+        ->assertJsonMissingPath(
+            'data.referral.inviter_business_id',
+        )
+        ->assertJsonMissingPath(
+            'data.referral.referred_business_id',
+        );
+
+    $referral = BusinessReferral::query()
+        ->where(
+            'referred_business_id',
+            $referred->id,
+        )
+        ->sole();
+
+    $this->assertSame(
+        $realInviter->id,
+        $referral->inviter_business_id,
+    );
+
+    $this->assertSame(
+        $referred->id,
+        $referral->referred_business_id,
+    );
+
+    $this->assertSame(
+        ReferralStatus::Claimed,
+        $referral->status,
+    );
+
+    $this->assertNull(
+        $referral->qualifying_payment_request_id,
+    );
+
+    $this->assertNull(
+        $referral->qualification_sequence,
+    );
+
+    $this->assertNull(
+        $referral->qualified_at,
+    );
+
+    $this->assertDatabaseCount(
+        'referral_rewards',
+        0,
+    );
+}
 
     public function test_missing_invite_code_uses_standard_validation_response(): void
     {

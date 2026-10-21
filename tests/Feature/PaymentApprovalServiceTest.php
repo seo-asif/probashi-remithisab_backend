@@ -555,6 +555,271 @@ class PaymentApprovalServiceTest extends TestCase
         );
     }
 
+    public function test_platform_admin_underlying_user_must_remain_active_and_verified(): void
+{
+    $business = $this->makeBusiness();
+    $owner = $this->makeMember($business);
+
+    $approvePayment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        1,
+        'USRSTAT001',
+        '01712345678',
+    );
+
+    $rejectPayment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        3,
+        'USRVER0001',
+        '01812345678',
+    );
+
+    /*
+     * PlatformAdmin row is Active, but its underlying
+     * user account has been suspended.
+     */
+    $suspendedUserAdmin = $this->makePlatformAdmin();
+
+    $suspendedUserAdmin->user->forceFill([
+        'status' => AccountStatus::Suspended,
+    ])->save();
+
+    $this->assertApiException(
+        fn() => $this->approvals->approve(
+            $approvePayment,
+            $suspendedUserAdmin,
+        ),
+        'PLATFORM_ADMIN_FORBIDDEN',
+        403,
+    );
+
+    /*
+     * PlatformAdmin row is Active, but its underlying
+     * user has lost email verification.
+     */
+    $unverifiedUserAdmin = $this->makePlatformAdmin();
+
+    $unverifiedUserAdmin->user->forceFill([
+        'email_verified_at' => null,
+    ])->save();
+
+    $this->assertApiException(
+        fn() => $this->approvals->reject(
+            $rejectPayment,
+            $unverifiedUserAdmin,
+            'Should not be allowed.',
+        ),
+        'PLATFORM_ADMIN_FORBIDDEN',
+        403,
+    );
+
+    /*
+     * Neither unauthorized operation may mutate payment state.
+     */
+    $this->assertSame(
+        PlanPaymentStatus::Pending,
+        $approvePayment->refresh()->status,
+    );
+
+    $this->assertSame(
+        PlanPaymentStatus::Pending,
+        $rejectPayment->refresh()->status,
+    );
+
+    $this->assertDatabaseMissing(
+        'business_subscriptions',
+        [
+            'business_id' => $business->id,
+            'access_source' => 'paid',
+        ],
+    );
+}
+
+public function test_successful_payment_approval_is_audited(): void
+{
+    $business = $this->makeBusiness();
+
+    $owner = $this->makeMember(
+        $business,
+        BusinessRole::Owner,
+    );
+
+    $payment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        1,
+        'AUDITAPP01',
+        '01712345678',
+    );
+
+    $admin = $this->makePlatformAdmin();
+
+    $approved = $this->approvals->approve(
+        $payment,
+        $admin,
+    );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            'business_id' => $business->id,
+            'actor_user_id' => $admin->user_id,
+            'action' => 'plan_payment.approved',
+            'target_type' => 'PlanPaymentRequest',
+            'target_id' => $approved->id,
+        ],
+    );
+}
+
+public function test_successful_payment_rejection_is_audited(): void
+{
+    $business = $this->makeBusiness();
+
+    $owner = $this->makeMember(
+        $business,
+        BusinessRole::Owner,
+    );
+
+    $payment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        1,
+        'AUDITREJ01',
+        '01712345678',
+    );
+
+    $admin = $this->makePlatformAdmin();
+
+    $rejected = $this->approvals->reject(
+        $payment,
+        $admin,
+        'Payment could not be verified.',
+    );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            'business_id' => $business->id,
+            'actor_user_id' => $admin->user_id,
+            'action' => 'plan_payment.rejected',
+            'target_type' => 'PlanPaymentRequest',
+            'target_id' => $rejected->id,
+        ],
+    );
+}
+public function test_approval_retry_does_not_duplicate_audit_event(): void
+{
+    $business = $this->makeBusiness();
+
+    $owner = $this->makeMember(
+        $business,
+        BusinessRole::Owner,
+    );
+
+    $payment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        1,
+        'AUDITRET01',
+        '01712345678',
+    );
+
+    $admin = $this->makePlatformAdmin();
+
+    $this->approvals->approve(
+        $payment,
+        $admin,
+    );
+
+    /*
+     * Idempotent retry.
+     */
+    $this->approvals->approve(
+        $payment->refresh(),
+        $admin,
+    );
+
+    $this->assertSame(
+        1,
+        \App\Models\AuditLog::query()
+            ->where(
+                'business_id',
+                $business->id,
+            )
+            ->where(
+                'action',
+                'plan_payment.approved',
+            )
+            ->where(
+                'target_type',
+                'PlanPaymentRequest',
+            )
+            ->where(
+                'target_id',
+                $payment->id,
+            )
+            ->count(),
+    );
+}
+public function test_rejection_retry_does_not_duplicate_audit_event(): void
+{
+    $business = $this->makeBusiness();
+
+    $owner = $this->makeMember(
+        $business,
+        BusinessRole::Owner,
+    );
+
+    $payment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        1,
+        'AUDITRET02',
+        '01712345678',
+    );
+
+    $admin = $this->makePlatformAdmin();
+
+    $this->approvals->reject(
+        $payment,
+        $admin,
+        'Payment could not be verified.',
+    );
+
+    /*
+     * Idempotent retry.
+     */
+    $this->approvals->reject(
+        $payment->refresh(),
+        $admin,
+        'Payment could not be verified.',
+    );
+
+    $this->assertSame(
+        1,
+        \App\Models\AuditLog::query()
+            ->where(
+                'business_id',
+                $business->id,
+            )
+            ->where(
+                'action',
+                'plan_payment.rejected',
+            )
+            ->where(
+                'target_type',
+                'PlanPaymentRequest',
+            )
+            ->where(
+                'target_id',
+                $payment->id,
+            )
+            ->count(),
+    );
+}
+
     public function test_approval_revalidates_stored_package(): void
     {
         $business = $this->makeBusiness();

@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Responses\ApiResponse;
 use App\Models\PlatformAdmin;
 use App\Models\PlatformPaymentProviderSetting;
+use App\Services\Auth\AuditLogger;
 use App\Support\Plans\BangladeshMobileNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,6 +17,12 @@ use LogicException;
 
 final class PaymentProviderSettingController extends Controller
 {
+
+    public function __construct(
+        private AuditLogger $auditLogger,
+    ) {
+    }
+
     /**
      * Return the current manual bKash configuration.
      *
@@ -174,6 +181,18 @@ final class PaymentProviderSettingController extends Controller
                     'updated_by_platform_admin_id' =>
                     $admin->id,
                 ])->save();
+
+/*
+ * Platform configuration has no tenant business_id.
+ *
+ * Do not include the bKash receiving number in audit metadata.
+ */
+                $this->auditLogger->record(
+                    'platform_payment_provider.updated',
+                    $admin->user,
+                    null,
+                    $setting,
+                );
 
                 return $setting->refresh();
             },

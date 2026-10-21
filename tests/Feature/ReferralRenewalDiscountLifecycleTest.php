@@ -633,4 +633,290 @@ class ReferralRenewalDiscountLifecycleTest extends TestCase
             $reward->applied_to_payment_request_id,
         );
     }
+    public function test_referral_reward_cannot_discount_another_business_payment(): void
+{
+    [
+        $inviter,
+        $inviterOwner,
+        $reward,
+    ] = $this->earnRenewalDiscount();
+
+    /*
+     * The inviter legitimately owns one available
+     * 150 BDT renewal reward.
+     */
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Available,
+        $reward->status,
+    );
+
+    $this->assertSame(
+        $inviter->id,
+        $reward->beneficiary_business_id,
+    );
+
+    /*
+     * A completely different business submits an
+     * Unlimited payment.
+     *
+     * It must never receive the inviter's reward.
+     */
+    $otherBusiness = $this->makeBusiness([
+        'name' => 'Other Business',
+    ]);
+
+    $otherOwner = $this->makeMember(
+        $otherBusiness,
+        BusinessRole::Owner,
+    );
+
+    $otherPayment = $this->requests->createUnlimited(
+        $otherBusiness,
+        $otherOwner,
+        1,
+        'CROSS00001',
+        '01732345678',
+    );
+
+    /*
+     * The unrelated business must pay the normal
+     * server-authoritative price.
+     */
+    $this->assertSame(
+        PlanPackages::priceBdt(1),
+        $otherPayment->expected_amount_bdt,
+    );
+
+    $this->assertSame(
+        520,
+        $otherPayment->expected_amount_bdt,
+    );
+
+    /*
+     * The inviter's reward must remain untouched.
+     */
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Available,
+        $reward->status,
+    );
+
+    $this->assertNull(
+        $reward->reserved_for_payment_request_id,
+    );
+
+    $this->assertNull(
+        $reward->reserved_at,
+    );
+
+    /*
+     * The rightful business must still be able to use it.
+     */
+    $inviterPayment = $this->requests->createUnlimited(
+        $inviter,
+        $inviterOwner,
+        1,
+        'RIGHT00001',
+        '01722345678',
+    );
+
+    $this->assertSame(
+        370,
+        $inviterPayment->expected_amount_bdt,
+    );
+
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Reserved,
+        $reward->status,
+    );
+
+    $this->assertSame(
+        $inviterPayment->id,
+        $reward->reserved_for_payment_request_id,
+    );
+
+    $this->assertNotSame(
+        $otherPayment->id,
+        $reward->reserved_for_payment_request_id,
+    );
+}
+
+public function test_referral_discount_reservation_is_audited(): void
+{
+    [
+        $inviter,
+        $inviterOwner,
+        $reward,
+    ] = $this->earnRenewalDiscount();
+
+    $renewal = $this->requests->createUnlimited(
+        $inviter,
+        $inviterOwner,
+        1,
+        'AUDITRWD01',
+        '01722345678',
+    );
+
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Reserved,
+        $reward->status,
+    );
+
+    $this->assertSame(
+        $renewal->id,
+        $reward->reserved_for_payment_request_id,
+    );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            'business_id' =>
+                $inviter->id,
+
+            'actor_user_id' =>
+                $inviterOwner->id,
+
+            'action' =>
+                'referral_reward.reserved',
+
+            'target_type' =>
+                'ReferralReward',
+
+            'target_id' =>
+                $reward->id,
+        ],
+    );
+}
+public function test_referral_discount_application_is_audited(): void
+{
+    [
+        $inviter,
+        $inviterOwner,
+        $reward,
+    ] = $this->earnRenewalDiscount();
+
+    $renewal = $this->requests->createUnlimited(
+        $inviter,
+        $inviterOwner,
+        1,
+        'AUDITRWD02',
+        '01722345678',
+    );
+
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Reserved,
+        $reward->status,
+    );
+
+    $admin = $this->makePlatformAdmin();
+
+    $this->approvals->approve(
+        $renewal,
+        $admin,
+    );
+
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Applied,
+        $reward->status,
+    );
+
+    $this->assertSame(
+        $renewal->id,
+        $reward->applied_to_payment_request_id,
+    );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            'business_id' =>
+                $inviter->id,
+
+            'actor_user_id' =>
+                $admin->user_id,
+
+            'action' =>
+                'referral_reward.applied',
+
+            'target_type' =>
+                'ReferralReward',
+
+            'target_id' =>
+                $reward->id,
+        ],
+    );
+}
+
+public function test_referral_discount_release_is_audited(): void
+{
+    [
+        $inviter,
+        $inviterOwner,
+        $reward,
+    ] = $this->earnRenewalDiscount();
+
+    $renewal = $this->requests->createUnlimited(
+        $inviter,
+        $inviterOwner,
+        1,
+        'AUDITRWD03',
+        '01722345678',
+    );
+
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Reserved,
+        $reward->status,
+    );
+
+    $admin = $this->makePlatformAdmin();
+
+    $this->approvals->reject(
+        $renewal,
+        $admin,
+        'Payment could not be verified.',
+    );
+
+    $reward->refresh();
+
+    $this->assertSame(
+        ReferralRewardStatus::Available,
+        $reward->status,
+    );
+
+    $this->assertNull(
+        $reward->reserved_for_payment_request_id,
+    );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            'business_id' =>
+                $inviter->id,
+
+            'actor_user_id' =>
+                $admin->user_id,
+
+            'action' =>
+                'referral_reward.released',
+
+            'target_type' =>
+                'ReferralReward',
+
+            'target_id' =>
+                $reward->id,
+        ],
+    );
+}
 }

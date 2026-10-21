@@ -10,7 +10,9 @@ use App\Exceptions\ApiException;
 use App\Models\Business;
 use App\Models\BusinessMembership;
 use App\Models\PlanPaymentRequest;
+use App\Models\ReferralReward;
 use App\Models\User;
+use App\Services\Auth\AuditLogger;
 use App\Support\Security\IdentifierHasher;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +26,7 @@ final class PaymentRequestService
     public function __construct(
         private IdentifierHasher $hasher,
         private ReferralRenewalDiscountService $renewalDiscounts,
+        private AuditLogger $auditLogger,
     ) {
     }
 
@@ -142,11 +145,43 @@ final class PaymentRequestService
                     'payer_number'         => $payerNumber,
                 ]);
 
-                return $this->renewalDiscounts
+                $payment = $this->renewalDiscounts
                     ->reserveForPayment(
                         $lockedBusiness,
                         $payment,
                     );
+
+/*
+ * A referral reward is optional.
+ *
+ * If this payment reserved one, record that state transition
+ * against the reward itself. The tenant user submitting the
+ * renewal is the actor who caused the reservation.
+ */
+                $reservedReward = ReferralReward::query()
+                    ->where(
+                        'reserved_for_payment_request_id',
+                        $payment->id,
+                    )
+                    ->first();
+
+                if ($reservedReward !== null) {
+                    $this->auditLogger->record(
+                        'referral_reward.reserved',
+                        $submittedBy,
+                        $lockedBusiness->id,
+                        $reservedReward,
+                    );
+                }
+
+                $this->auditLogger->record(
+                    'plan_payment.submitted',
+                    $submittedBy,
+                    $lockedBusiness->id,
+                    $payment,
+                );
+
+                return $payment;
             });
         } catch (QueryException $e) {
             /*
@@ -183,14 +218,72 @@ final class PaymentRequestService
         Business $business,
         User $user,
     ): void {
+        /*
+         * createUnlimited() reloads and locks this Business row before
+         * calling this method, so this is authoritative database state.
+         *
+         * Direct service calls must not bypass suspended-business rules.
+         */
+        if ($business->status !== AccountStatus::Active) {
+            throw new ApiException(
+                'PLAN_PAYMENT_FORBIDDEN',
+                'Payments cannot be submitted for a suspended business.',
+                403,
+            );
+        }
+
+        /*
+         * Do not rely only on business.context middleware.
+         *
+         * PaymentRequestService may be invoked directly, so revalidate
+         * the underlying user account from authoritative database state.
+         */
+        $eligibleUser = User::query()
+            ->whereKey($user->id)
+            ->where(
+                'status',
+                AccountStatus::Active->value,
+            )
+            ->whereNotNull(
+                'email_verified_at',
+            )
+            ->lockForUpdate()
+            ->first();
+
+        if ($eligibleUser === null) {
+            throw new ApiException(
+                'PLAN_PAYMENT_FORBIDDEN',
+                'Only an active and verified account owner or administrator can submit a plan payment.',
+                403,
+            );
+        }
+
+        /*
+         * The user must hold an active Owner or Administrator
+         * membership in this exact business.
+         *
+         * This prevents direct-service cross-business identity mixing.
+         */
         $allowed = BusinessMembership::query()
-            ->where('business_id', $business->id)
-            ->where('user_id', $user->id)
-            ->where('status', AccountStatus::Active->value)
-            ->whereIn('role', [
-                BusinessRole::Owner->value,
-                BusinessRole::Administrator->value,
-            ])
+            ->where(
+                'business_id',
+                $business->id,
+            )
+            ->where(
+                'user_id',
+                $user->id,
+            )
+            ->where(
+                'status',
+                AccountStatus::Active->value,
+            )
+            ->whereIn(
+                'role',
+                [
+                    BusinessRole::Owner->value,
+                    BusinessRole::Administrator->value,
+                ],
+            )
             ->exists();
 
         if (!$allowed) {

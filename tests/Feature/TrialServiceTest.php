@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\AccountStatus;
 use App\Enums\BusinessRole;
 use App\Exceptions\ApiException;
 use App\Models\Business;
@@ -10,6 +11,7 @@ use App\Models\BusinessSubscription;
 use App\Support\Plans\PlanLimits;
 use App\Support\Plans\PlanResolver;
 use App\Support\Plans\TrialService;
+use App\Models\User;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -62,7 +64,7 @@ class TrialServiceTest extends TestCase
         $this->assertSame(
             7 * 24 * 60 * 60,
             $subscription->access_ends_at->getTimestamp()
-                - $subscription->access_starts_at->getTimestamp(),
+             - $subscription->access_starts_at->getTimestamp(),
         );
 
         $this->assertSame(
@@ -77,6 +79,109 @@ class TrialServiceTest extends TestCase
             )
         );
     }
+
+    public function test_suspended_business_cannot_activate_trial_through_service(): void
+    {
+        $business = $this->makeBusiness();
+
+        $membership = $this->membership(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        $business->forceFill([
+            'status' => AccountStatus::Suspended,
+        ])->save();
+
+        $this->assertDatabaseHas(
+            'businesses',
+            [
+                'id'     => $business->id,
+                'status' => AccountStatus::Suspended->value,
+            ],
+        );
+
+        try {
+            app(TrialService::class)->activate(
+                $business,
+                $membership,
+            );
+
+            $this->fail(
+                'Suspended business unexpectedly activated the trial.'
+            );
+        } catch (ApiException $e) {
+            $this->assertSame(
+                'PLAN_TRIAL_FORBIDDEN',
+                $e->errorCode,
+            );
+
+            $this->assertSame(
+                403,
+                $e->status,
+            );
+        }
+
+        $this->assertDatabaseMissing(
+            'business_subscriptions',
+            [
+                'business_id' => $business->id,
+            ],
+        );
+    }
+
+    public function test_unverified_user_cannot_activate_trial_through_service(): void
+{
+    $business = $this->makeBusiness();
+
+    $membership = $this->membership(
+        $business,
+        BusinessRole::Owner,
+    );
+
+    $user = $membership->user()
+        ->firstOrFail();
+
+    $user->forceFill([
+        'email_verified_at' => null,
+    ])->save();
+
+    $this->assertDatabaseHas(
+        'users',
+        [
+            'id' => $user->id,
+            'email_verified_at' => null,
+        ],
+    );
+
+    try {
+        app(TrialService::class)->activate(
+            $business,
+            $membership,
+        );
+
+        $this->fail(
+            'Unverified user unexpectedly activated the trial.'
+        );
+    } catch (ApiException $e) {
+        $this->assertSame(
+            'PLAN_TRIAL_FORBIDDEN',
+            $e->errorCode,
+        );
+
+        $this->assertSame(
+            403,
+            $e->status,
+        );
+    }
+
+    $this->assertDatabaseMissing(
+        'business_subscriptions',
+        [
+            'business_id' => $business->id,
+        ],
+    );
+}
 
     public function test_administrator_can_activate_trial(): void
     {
@@ -153,7 +258,7 @@ class TrialServiceTest extends TestCase
 
         $first->forceFill([
             'access_starts_at' => now('UTC')->subDays(8),
-            'access_ends_at' => now('UTC')->subDay(),
+            'access_ends_at'   => now('UTC')->subDay(),
         ])->save();
 
         try {
@@ -194,12 +299,12 @@ class TrialServiceTest extends TestCase
         $endsAt = now('UTC')->addDays(30);
 
         $existing = BusinessSubscription::create([
-            'business_id' => $business->id,
-            'tier' => PlanLimits::UNLIMITED,
-            'access_source' => 'manual',
+            'business_id'      => $business->id,
+            'tier'             => PlanLimits::UNLIMITED,
+            'access_source'    => 'manual',
             'access_starts_at' => $startsAt,
-            'access_ends_at' => $endsAt,
-            'trial_used_at' => null,
+            'access_ends_at'   => $endsAt,
+            'trial_used_at'    => null,
         ]);
 
         try {
@@ -277,12 +382,12 @@ class TrialServiceTest extends TestCase
         );
 
         BusinessSubscription::create([
-            'business_id' => $business->id,
-            'tier' => PlanLimits::UNLIMITED,
-            'access_source' => 'manual',
+            'business_id'      => $business->id,
+            'tier'             => PlanLimits::UNLIMITED,
+            'access_source'    => 'manual',
             'access_starts_at' => now('UTC')->subDays(40),
-            'access_ends_at' => now('UTC')->subDays(10),
-            'trial_used_at' => null,
+            'access_ends_at'   => now('UTC')->subDays(10),
+            'trial_used_at'    => null,
         ]);
 
         $subscription = app(TrialService::class)->activate(
@@ -304,6 +409,56 @@ class TrialServiceTest extends TestCase
                 $subscription,
                 $subscription->access_starts_at,
             )
+        );
+    }
+
+    public function test_suspended_membership_cannot_activate_trial_through_service(): void
+    {
+        $business = $this->makeBusiness();
+
+        $membership = $this->membership(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        $membership->forceFill([
+            'status' => AccountStatus::Suspended,
+        ])->save();
+
+        $this->assertDatabaseHas(
+            'business_memberships',
+            [
+                'id'     => $membership->id,
+                'status' => AccountStatus::Suspended->value,
+            ],
+        );
+
+        try {
+            app(TrialService::class)->activate(
+                $business,
+                $membership,
+            );
+
+            $this->fail(
+                'Suspended membership unexpectedly activated the trial.'
+            );
+        } catch (ApiException $e) {
+            $this->assertSame(
+                'PLAN_TRIAL_FORBIDDEN',
+                $e->errorCode,
+            );
+
+            $this->assertSame(
+                403,
+                $e->status,
+            );
+        }
+
+        $this->assertDatabaseMissing(
+            'business_subscriptions',
+            [
+                'business_id' => $business->id,
+            ],
         );
     }
 }

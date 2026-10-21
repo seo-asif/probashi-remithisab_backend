@@ -5,11 +5,14 @@ namespace App\Support\Plans;
 use App\Enums\AccountStatus;
 use App\Enums\PlanPaymentProduct;
 use App\Enums\PlanPaymentStatus;
+use App\Enums\ReferralRewardStatus;
 use App\Exceptions\ApiException;
 use App\Models\Business;
 use App\Models\BusinessReferral;
 use App\Models\PlanPaymentRequest;
 use App\Models\PlatformAdmin;
+use App\Models\ReferralReward;
+use App\Services\Auth\AuditLogger;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 
@@ -19,6 +22,7 @@ final class PaymentApprovalService
         private PaidAccessService $paidAccess,
         private ReferralQualificationService $referralQualification,
         private ReferralRenewalDiscountService $renewalDiscounts,
+        private AuditLogger $auditLogger,
     ) {
     }
 
@@ -161,11 +165,37 @@ final class PaymentApprovalService
                  * This remains inside the same transaction as entitlement
                  * activation and payment approval.
                  */
+                $reservedReward = ReferralReward::query()
+                    ->where(
+                        'reserved_for_payment_request_id',
+                        $payment->id,
+                    )
+                    ->first();
+
                 $this->renewalDiscounts
                     ->applyReservedForApprovedPayment(
                         $business,
                         $payment,
                     );
+
+                if ($reservedReward !== null) {
+                    $reservedReward->refresh();
+
+                    /*
+                     * Only record a successful Reserved -> Applied transition.
+                     */
+                    if (
+                        $reservedReward->status
+                        === ReferralRewardStatus::Applied
+                    ) {
+                        $this->auditLogger->record(
+                            'referral_reward.applied',
+                            $lockedAdmin->user,
+                            $business->id,
+                            $reservedReward,
+                        );
+                    }
+                }
                 /*
                  * Qualification deliberately happens only after the
                  * payment has authoritative Approved + applied state.
@@ -187,6 +217,20 @@ final class PaymentApprovalService
                             $payment,
                         );
                 }
+
+/*
+ * Record only the actual Pending -> Approved transition.
+ *
+ * This is deliberately below all entitlement/referral work so a
+ * failed approval cannot leave a false successful audit event.
+ * The earlier idempotent Approved return does not reach this code.
+ */
+                $this->auditLogger->record(
+                    'plan_payment.approved',
+                    $lockedAdmin->user,
+                    $business->id,
+                    $payment,
+                );
 
                 return $payment->refresh();
             }, 3);
@@ -313,11 +357,57 @@ final class PaymentApprovalService
              * Release the reservation inside this same transaction.
              * If release fails, the payment rejection is rolled back too.
              */
+            /*
+             * Capture the reward before release because the release clears
+             * reserved_for_payment_request_id.
+             */
+            $reservedReward = ReferralReward::query()
+                ->where(
+                    'reserved_for_payment_request_id',
+                    $payment->id,
+                )
+                ->first();
+
             $this->renewalDiscounts
                 ->releaseReservedForRejectedPayment(
                     $business,
                     $payment,
                 );
+
+            if ($reservedReward !== null) {
+                $reservedReward->refresh();
+
+                /*
+                 * Record only a successful Reserved -> Available transition.
+                 */
+                if (
+                    $reservedReward->status
+                    === ReferralRewardStatus::Available
+                ) {
+                    $this->auditLogger->record(
+                        'referral_reward.released',
+                        $admin->user,
+                        $business->id,
+                        $reservedReward,
+                    );
+                }
+            }
+
+/*
+ * Record only the actual Pending -> Rejected transition.
+ *
+ * The earlier idempotent Rejected return never reaches this point,
+ * so retries cannot create duplicate rejection audit events.
+ *
+ * Do not copy the rejection reason into audit metadata. The payment
+ * record already contains the authoritative decision reason.
+ */
+            $this->auditLogger->record(
+                'plan_payment.rejected',
+                $admin->user,
+                $business->id,
+                $payment,
+            );
 
             return $payment->refresh();
         }, 3);
@@ -518,6 +608,10 @@ final class PaymentApprovalService
 
     private function lockActiveAdmin(int $adminId): PlatformAdmin
     {
+        /*
+         * Revalidate the PlatformAdmin row inside the same transaction
+         * that will make the payment decision.
+         */
         $admin = PlatformAdmin::query()
             ->whereKey($adminId)
             ->where(
@@ -527,13 +621,47 @@ final class PaymentApprovalService
             ->lockForUpdate()
             ->first();
 
-        if (!$admin) {
+        if ($admin === null) {
             throw new ApiException(
                 'PLATFORM_ADMIN_FORBIDDEN',
                 'An active platform administrator is required.',
                 403,
             );
         }
+
+        /*
+         * Platform-admin authority also depends on the underlying
+         * user account remaining active and email-verified.
+         *
+         * Do not rely only on HTTP middleware because this service
+         * may also be called directly by trusted application code.
+         */
+        $user = $admin->user()
+            ->where(
+                'status',
+                AccountStatus::Active->value,
+            )
+            ->whereNotNull(
+                'email_verified_at',
+            )
+            ->lockForUpdate()
+            ->first();
+
+        if ($user === null) {
+            throw new ApiException(
+                'PLATFORM_ADMIN_FORBIDDEN',
+                'An active platform administrator is required.',
+                403,
+            );
+        }
+
+        /*
+         * Keep the authoritative locked User available for audit attribution.
+         */
+        $admin->setRelation(
+            'user',
+            $user,
+        );
 
         return $admin;
     }

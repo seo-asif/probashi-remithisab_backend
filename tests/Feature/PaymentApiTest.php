@@ -25,8 +25,8 @@ class PaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 3,
-            'trx_id' => '9jk4m7xq2p',
-            'payer_number' => '01712345678',
+            'trx_id'         => '9jk4m7xq2p',
+            'payer_number'   => '01712345678',
         ]);
 
         $response
@@ -61,8 +61,8 @@ class PaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'AB12CD34EF',
-            'payer_number' => '01812345678',
+            'trx_id'         => 'AB12CD34EF',
+            'payer_number'   => '01812345678',
         ])->assertCreated();
 
         $this->assertDatabaseCount(
@@ -81,8 +81,8 @@ class PaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'AB12CD34EF',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'AB12CD34EF',
+            'payer_number'   => '01712345678',
         ])
             ->assertStatus(403)
             ->assertJsonPath(
@@ -113,8 +113,8 @@ class PaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'AB12CD34EF',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'AB12CD34EF',
+            'payer_number'   => '01712345678',
         ])
             ->assertStatus(403)
             ->assertJsonPath(
@@ -144,20 +144,20 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
-            'package_months' => 12,
-            'trx_id' => 'ZX98YU76TR',
-            'payer_number' => '01912345678',
+            'package_months'      => 12,
+            'trx_id'              => 'ZX98YU76TR',
+            'payer_number'        => '01912345678',
 
             // Malicious/untrusted fields.
             'expected_amount_bdt' => 1,
-            'amount_bdt' => 1,
-            'status' => 'approved',
-            'product_type' => 'sender_topup',
+            'amount_bdt'          => 1,
+            'status'              => 'approved',
+            'product_type'        => 'sender_topup',
             'beneficiary_user_id' => $user->id,
-            'applied_at' => now()->toISOString(),
-            'access_source' => 'paid',
-            'access_starts_at' => now()->toISOString(),
-            'access_ends_at' => now()->addYears(100)->toISOString(),
+            'applied_at'          => now()->toISOString(),
+            'access_source'       => 'paid',
+            'access_starts_at'    => now()->toISOString(),
+            'access_ends_at'      => now()->addYears(100)->toISOString(),
         ])->assertCreated();
 
         $payment = PlanPaymentRequest::query()->sole();
@@ -175,7 +175,7 @@ class PaymentApiTest extends TestCase
             'business_subscriptions',
             [
                 'business_id' => $business->id,
-                'tier' => 'unlimited',
+                'tier'        => 'unlimited',
             ],
         );
     }
@@ -190,8 +190,8 @@ class PaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 6,
-            'trx_id' => 'MN45PQ67RS',
-            'payer_number' => '01612345678',
+            'trx_id'         => 'MN45PQ67RS',
+            'payer_number'   => '01612345678',
         ])->assertCreated();
 
         $payment = PlanPaymentRequest::query()->sole();
@@ -219,8 +219,8 @@ class PaymentApiTest extends TestCase
 
         $responseA = $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'AA11BB22CC',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'AA11BB22CC',
+            'payer_number'   => '01712345678',
         ])->assertCreated();
 
         $paymentAId = $responseA->json('data.id');
@@ -233,8 +233,8 @@ class PaymentApiTest extends TestCase
 
         $responseB = $this->postJson('/api/v1/payments', [
             'package_months' => 3,
-            'trx_id' => 'DD33EE44FF',
-            'payer_number' => '01812345678',
+            'trx_id'         => 'DD33EE44FF',
+            'payer_number'   => '01812345678',
         ])->assertCreated();
 
         $paymentBId = $responseB->json('data.id');
@@ -258,6 +258,100 @@ class PaymentApiTest extends TestCase
         $this->assertNotContains($paymentBId, $ids);
     }
 
+    public function test_client_cannot_choose_payment_business_or_submitter(): void
+    {
+        [$businessA, $ownerA] = $this->makeAuthorizedMember(
+            BusinessRole::Owner,
+        );
+
+        [$businessB, $ownerB] = $this->makeAuthorizedMember(
+            BusinessRole::Owner,
+        );
+
+        Sanctum::actingAs($ownerA);
+
+        $this->postJson('/api/v1/payments', [
+            'package_months'       => 1,
+            'trx_id'               => 'TENANT0001',
+            'payer_number'         => '01712345678',
+
+            // Malicious cross-tenant identity fields.
+            'business_id'          => $businessB->id,
+            'submitted_by_user_id' => $ownerB->id,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('success', true);
+
+        $payment = PlanPaymentRequest::query()->sole();
+
+        /*
+         * The authenticated tenant context and authenticated user
+         * must be authoritative. Client-supplied IDs are ignored.
+         */
+        $this->assertSame(
+            $businessA->id,
+            $payment->business_id,
+        );
+
+        $this->assertSame(
+            $ownerA->id,
+            $payment->submitted_by_user_id,
+        );
+
+        $this->assertNotSame(
+            $businessB->id,
+            $payment->business_id,
+        );
+
+        $this->assertNotSame(
+            $ownerB->id,
+            $payment->submitted_by_user_id,
+        );
+    }
+    public function test_client_cannot_force_referral_discount_or_reward(): void
+{
+    [, $owner] = $this->makeAuthorizedMember(
+        BusinessRole::Owner,
+    );
+
+    Sanctum::actingAs($owner);
+
+    $response = $this->postJson('/api/v1/payments', [
+        'package_months' => 1,
+        'trx_id' => 'REWARD0001',
+        'payer_number' => '01712345678',
+
+        // Malicious/untrusted referral and pricing fields.
+        'referral_reward_id' => 999999,
+        'referral_discount_bdt' => 150,
+        'discount_bdt' => 150,
+        'payable_amount_bdt' => 370,
+        'expected_amount_bdt' => 370,
+        'reward_status' => 'available',
+    ]);
+
+    $response
+        ->assertCreated()
+        ->assertJsonPath('success', true)
+        ->assertJsonPath('data.amount_bdt', 520);
+
+    $payment = PlanPaymentRequest::query()->sole();
+
+    /*
+     * With no legitimate server-side referral reward,
+     * the authoritative package price must remain unchanged.
+     */
+    $this->assertSame(
+        520,
+        $payment->expected_amount_bdt,
+    );
+
+    $this->assertDatabaseCount(
+        'referral_rewards',
+        0,
+    );
+}
+
     public function test_invalid_package_is_rejected(): void
     {
         [, $user] = $this->makeAuthorizedMember(
@@ -268,11 +362,11 @@ class PaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 24,
-            'trx_id' => 'AB12CD34EF',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'AB12CD34EF',
+            'payer_number'   => '01712345678',
         ])
             ->assertStatus(422)
-->assertJsonPath('code', 'VALIDATION_FAILED');
+            ->assertJsonPath('code', 'VALIDATION_FAILED');
 
         $this->assertDatabaseCount(
             'plan_payment_requests',
@@ -288,8 +382,8 @@ class PaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'AB12CD34EF',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'AB12CD34EF',
+            'payer_number'   => '01712345678',
         ])
             ->assertStatus(401)
             ->assertJsonPath('code', 'UNAUTHENTICATED');
@@ -306,7 +400,7 @@ class PaymentApiTest extends TestCase
         );
 
         $user->forceFill([
-            'status' => 'active',
+            'status'            => 'active',
             'email_verified_at' => now(),
         ])->save();
 

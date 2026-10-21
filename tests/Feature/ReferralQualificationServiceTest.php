@@ -64,6 +64,54 @@ class ReferralQualificationServiceTest extends TestCase
         parent::tearDown();
     }
 
+    public function test_referral_qualification_retry_does_not_duplicate_audit_event(): void
+{
+    $inviter = $this->makeBusiness();
+
+    [$referred, $owner, $referral] =
+        $this->claimedReferral($inviter);
+
+    $payment = $this->approvedPaidPayment(
+        $referred,
+        $owner,
+        'AUDITQUAL2',
+    );
+
+    $this->qualification
+        ->qualifyApprovedUnlimitedPayment(
+            $payment,
+        );
+
+    /*
+     * Same qualifying payment is an idempotent retry.
+     */
+    $this->qualification
+        ->qualifyApprovedUnlimitedPayment(
+            $payment->refresh(),
+        );
+
+    $this->assertSame(
+        1,
+        \App\Models\AuditLog::query()
+            ->where(
+                'business_id',
+                $inviter->id,
+            )
+            ->where(
+                'action',
+                'referral.qualified',
+            )
+            ->where(
+                'target_type',
+                'BusinessReferral',
+            )
+            ->where(
+                'target_id',
+                $referral->id,
+            )
+            ->count(),
+    );
+}
     public function test_free_inviter_receives_immediate_seven_day_unlimited_reward(): void
     {
         CarbonImmutable::setTestNow(
@@ -179,6 +227,48 @@ class ReferralQualificationServiceTest extends TestCase
         );
     }
 
+    public function test_successful_referral_qualification_is_audited(): void
+{
+    $inviter = $this->makeBusiness([
+        'name' => 'Audit Qualification Inviter',
+    ]);
+
+    [$referred, $owner, $referral] =
+        $this->claimedReferral($inviter);
+
+    $payment = $this->approvedPaidPayment(
+        $referred,
+        $owner,
+        'AUDITQUAL1',
+    );
+
+    $qualified = $this->qualification
+        ->qualifyApprovedUnlimitedPayment(
+            $payment,
+        );
+
+    $this->assertNotNull($qualified);
+
+    $admin = PlatformAdmin::query()
+        ->findOrFail(
+            $payment->decided_by_platform_admin_id,
+        );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            /*
+             * Qualification creates a reward for the inviter,
+             * so the audit event belongs to the inviter business.
+             */
+            'business_id' => $inviter->id,
+            'actor_user_id' => $admin->user_id,
+            'action' => 'referral.qualified',
+            'target_type' => 'BusinessReferral',
+            'target_id' => $referral->id,
+        ],
+    );
+}
     public function test_active_trial_inviter_remains_free_underlying_and_gets_seven_more_days(): void
     {
         $now = CarbonImmutable::parse(

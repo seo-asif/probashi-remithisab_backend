@@ -361,6 +361,157 @@ class PlatformPaymentProviderSettingApiTest extends TestCase
         );
     }
 
+    public function test_client_cannot_spoof_platform_admin_when_updating_payment_provider(): void
+{
+    /*
+     * Create the Platform Admin whose ID the attacker
+     * will try to inject.
+     */
+    [, $otherAdminUser] = $this->makeAuthorizedMember(
+        BusinessRole::ReadOnlyStaff,
+    );
+
+    $otherAdmin = $this->makePlatformAdmin(
+        $otherAdminUser,
+    );
+
+    /*
+     * Create and authenticate the real Platform Admin.
+     */
+    [, $realAdminUser] = $this->makeAuthorizedMember(
+        BusinessRole::ReadOnlyStaff,
+    );
+
+    $realAdmin = $this->makePlatformAdmin(
+        $realAdminUser,
+    );
+
+    Sanctum::actingAs($realAdminUser);
+
+    $this->putJson(self::URL, [
+        'is_enabled' => true,
+        'bkash_number' => '01712345678',
+
+        // Malicious/untrusted identity field.
+        'updated_by_platform_admin_id' => $otherAdmin->id,
+    ])
+        ->assertOk()
+        ->assertJsonPath(
+            'data.is_enabled',
+            true,
+        );
+
+    $setting = PlatformPaymentProviderSetting::query()
+        ->where(
+            'provider',
+            'manual_bkash',
+        )
+        ->sole();
+
+    /*
+     * Only the middleware-provided authenticated Platform Admin
+     * may become the recorded updater.
+     */
+    $this->assertSame(
+        $realAdmin->id,
+        $setting->updated_by_platform_admin_id,
+    );
+
+    $this->assertNotSame(
+        $otherAdmin->id,
+        $setting->updated_by_platform_admin_id,
+    );
+
+    $this->assertSame(
+        '01712345678',
+        $setting->public_account_identifier,
+    );
+
+    $this->assertTrue(
+        $setting->is_enabled,
+    );
+}
+public function test_platform_admin_payment_provider_update_is_audited(): void
+{
+    $platformAdmin = $this->actingAsPlatformAdmin();
+
+    $this->putJson(self::URL, [
+        'is_enabled'   => true,
+        'bkash_number' => '01712345678',
+    ])->assertOk();
+
+    $setting = PlatformPaymentProviderSetting::query()
+        ->where(
+            'provider',
+            'manual_bkash',
+        )
+        ->sole();
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            /*
+             * This is platform configuration, not tenant-owned data.
+             */
+            'business_id' => null,
+
+            'actor_user_id' =>
+                $platformAdmin->user_id,
+
+            'action' =>
+                'platform_payment_provider.updated',
+
+            'target_type' =>
+                'PlatformPaymentProviderSetting',
+
+            'target_id' =>
+                $setting->id,
+        ],
+    );
+}
+public function test_failed_payment_provider_update_is_not_audited_as_success(): void
+{
+    $platformAdmin = $this->actingAsPlatformAdmin();
+
+    $this->putJson(self::URL, [
+        'is_enabled'   => true,
+        'bkash_number' => '01234567890',
+    ])
+        ->assertStatus(422)
+        ->assertJsonPath(
+            'code',
+            'VALIDATION_FAILED',
+        );
+
+    $this->assertSame(
+        0,
+        \App\Models\AuditLog::query()
+            ->where(
+                'actor_user_id',
+                $platformAdmin->user_id,
+            )
+            ->where(
+                'action',
+                'platform_payment_provider.updated',
+            )
+            ->count(),
+    );
+
+    $setting = PlatformPaymentProviderSetting::query()
+        ->where(
+            'provider',
+            'manual_bkash',
+        )
+        ->sole();
+
+    $this->assertFalse(
+        $setting->is_enabled,
+    );
+
+    $this->assertNull(
+        $setting->public_account_identifier,
+    );
+}
     private function actingAsPlatformAdmin():
     PlatformAdmin {
         [, $adminUser] = $this->makeAuthorizedMember(

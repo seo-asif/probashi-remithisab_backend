@@ -8,6 +8,7 @@ use App\Enums\PlanPaymentProduct;
 use App\Enums\PlanPaymentStatus;
 use App\Exceptions\ApiException;
 use App\Models\PlanPaymentRequest;
+use App\Models\User;
 use App\Support\Plans\PaymentRequestService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -213,6 +214,75 @@ class PaymentRequestServiceTest extends TestCase
         $this->assertSame(
             $admin->id,
             $adminRequest->submitted_by_user_id,
+        );
+    }
+
+    public function test_user_cannot_submit_payment_for_another_business_through_service(): void
+    {
+        $businessA = $this->makeBusiness([
+            'name' => 'Business A',
+        ]);
+
+        $ownerA = $this->makeMember(
+            $businessA,
+            BusinessRole::Owner,
+        );
+
+        $businessB = $this->makeBusiness([
+            'name' => 'Business B',
+        ]);
+
+        $ownerB = $this->makeMember(
+            $businessB,
+            BusinessRole::Owner,
+        );
+
+        /*
+         * Attempt to combine Business A with Business B's owner.
+         *
+         * This bypasses the HTTP tenant-context layer and calls the
+         * service directly, so the service itself must fail closed.
+         */
+        $this->assertApiException(
+            fn() => $this->service->createUnlimited(
+                $businessA,
+                $ownerB,
+                1,
+                'CROSSUSR01',
+                '01712345678',
+            ),
+            'PLAN_PAYMENT_FORBIDDEN',
+            403,
+        );
+
+        /*
+         * No payment may be created for either tenant.
+         */
+        $this->assertDatabaseCount(
+            'plan_payment_requests',
+            0,
+        );
+
+        /*
+         * Confirm the test setup itself is valid:
+         * Business A's real owner can still submit normally.
+         */
+        $payment = $this->service->createUnlimited(
+            $businessA,
+            $ownerA,
+            1,
+            'RIGHTUSR01',
+            '01712345678',
+        );
+
+        $this->assertSame(
+            $businessA->id,
+            $payment->business_id,
+        );
+
+        $this->assertSame(
+            $ownerA->id,
+            $payment->submitted_by_user_id,
         );
     }
 
@@ -551,6 +621,239 @@ class PaymentRequestServiceTest extends TestCase
 
         $this->fail(
             "Expected ApiException {$code} was not thrown.",
+        );
+    }
+
+    public function test_direct_service_rejects_ineligible_user_accounts(): void
+    {
+        /*
+         * Case 1: active Owner membership, but the underlying
+         * user account itself is suspended.
+         */
+        $suspendedBusiness = $this->makeBusiness([
+            'name' => 'Suspended User Business',
+        ]);
+
+        $suspendedUser = $this->makeMember(
+            $suspendedBusiness,
+            BusinessRole::Owner,
+        );
+
+        $suspendedUser->forceFill([
+            'status' => AccountStatus::Suspended,
+        ])->save();
+
+        $this->assertDatabaseHas(
+            'users',
+            [
+                'id'     => $suspendedUser->id,
+                'status' => AccountStatus::Suspended->value,
+            ],
+        );
+
+        $this->assertFalse(
+            User::query()
+                ->whereKey($suspendedUser->id)
+                ->where(
+                    'status',
+                    AccountStatus::Active->value,
+                )
+                ->exists(),
+        );
+
+        $this->assertApiException(
+            fn() => $this->service->createUnlimited(
+                $suspendedBusiness,
+                $suspendedUser,
+                1,
+                'SUSPUSR001',
+                '01712345678',
+            ),
+            'PLAN_PAYMENT_FORBIDDEN',
+            403,
+        );
+
+        /*
+         * Case 2: active Owner membership and active account,
+         * but the user's email is no longer verified.
+         */
+        $unverifiedBusiness = $this->makeBusiness([
+            'name' => 'Unverified User Business',
+        ]);
+
+        $unverifiedUser = $this->makeMember(
+            $unverifiedBusiness,
+            BusinessRole::Owner,
+        );
+
+        $unverifiedUser->forceFill([
+            'email_verified_at' => null,
+        ])->save();
+
+        $this->assertApiException(
+            fn() => $this->service->createUnlimited(
+                $unverifiedBusiness,
+                $unverifiedUser,
+                1,
+                'UNVERIF001',
+                '01812345678',
+            ),
+            'PLAN_PAYMENT_FORBIDDEN',
+            403,
+        );
+
+        /*
+         * Neither direct-service attempt may create a payment.
+         */
+        $this->assertDatabaseCount(
+            'plan_payment_requests',
+            0,
+        );
+    }
+
+    public function test_direct_service_rejects_suspended_business(): void
+    {
+        $business = $this->makeBusiness([
+            'name' => 'Suspended Business',
+        ]);
+
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        /*
+         * Membership and user remain valid, but the business itself
+         * has been suspended.
+         */
+        $business->forceFill([
+            'status' => AccountStatus::Suspended,
+        ])->save();
+
+        $this->assertDatabaseHas(
+            'businesses',
+            [
+                'id'     => $business->id,
+                'status' => AccountStatus::Suspended->value,
+            ],
+        );
+
+        /*
+         * Direct service invocation must enforce the same business
+         * eligibility boundary as business.context middleware.
+         */
+        $this->assertApiException(
+            fn() => $this->service->createUnlimited(
+                $business,
+                $owner,
+                1,
+                'SUSPBIZ001',
+                '01712345678',
+            ),
+            'PLAN_PAYMENT_FORBIDDEN',
+            403,
+        );
+
+        $this->assertDatabaseCount(
+            'plan_payment_requests',
+            0,
+        );
+    }
+
+    public function test_successful_payment_submission_is_audited(): void
+    {
+        $business = $this->makeBusiness([
+            'name' => 'Audited Payment Business',
+        ]);
+
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        $payment = $this->service->createUnlimited(
+            $business,
+            $owner,
+            1,
+            'AUDITPAY01',
+            '01712345678',
+        );
+
+        $this->assertDatabaseHas(
+            'audit_logs',
+            [
+                'business_id'   => $business->id,
+                'actor_user_id' => $owner->id,
+                'action'        => 'plan_payment.submitted',
+                'target_type'   => 'PlanPaymentRequest',
+                'target_id'     => $payment->id,
+            ],
+        );
+    }
+
+    public function test_failed_payment_submission_does_not_create_success_audit(): void
+    {
+        $business = $this->makeBusiness([
+            'name' => 'Failed Audit Payment Business',
+        ]);
+
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        /*
+         * First submission succeeds and should create exactly one
+         * plan_payment.submitted audit event.
+         */
+        $this->service->createUnlimited(
+            $business,
+            $owner,
+            1,
+            'AUDITDUP01',
+            '01712345678',
+        );
+
+        /*
+         * Reusing the same TrxID must fail.
+         */
+        $this->assertApiException(
+            fn() => $this->service->createUnlimited(
+                $business,
+                $owner,
+                1,
+                'AUDITDUP01',
+                '01812345678',
+            ),
+            'PAYMENT_TRX_ALREADY_USED',
+            409,
+        );
+
+        /*
+         * The failed second attempt must not create another
+         * successful-submission audit event.
+         */
+        $this->assertSame(
+            1,
+            \App\Models\AuditLog::query()
+                ->where(
+                    'business_id',
+                    $business->id,
+                )
+                ->where(
+                    'actor_user_id',
+                    $owner->id,
+                )
+                ->where(
+                    'action',
+                    'plan_payment.submitted',
+                )
+                ->count(),
+        );
+
+        $this->assertDatabaseCount(
+            'plan_payment_requests',
+            1,
         );
     }
 }

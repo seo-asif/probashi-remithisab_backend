@@ -8,6 +8,7 @@ use App\Enums\ReferralStatus;
 use App\Exceptions\ApiException;
 use App\Models\BusinessReferral;
 use App\Models\BusinessSubscription;
+use App\Models\User;
 use App\Support\Plans\PlanLimits;
 use App\Support\Plans\ReferralRules;
 use App\Support\Plans\ReferralService;
@@ -604,6 +605,238 @@ class ReferralServiceTest extends TestCase
         );
     }
 
+    public function test_unverified_user_cannot_claim_referral_through_service(): void
+{
+    $inviter = $this->makeBusiness([
+        'name' => 'Referral Inviter',
+    ]);
+
+    $referred = $this->makeBusiness([
+        'name' => 'Referral Friend',
+    ]);
+
+    $owner = $this->makeMember(
+        $referred,
+        BusinessRole::Owner,
+    );
+
+    $owner->forceFill([
+        'email_verified_at' => null,
+    ])->save();
+
+    $inviteCode = $this->service
+        ->profileFor($inviter)
+        ->invite_code;
+
+    $this->assertApiException(
+        fn() => $this->service->claim(
+            $referred,
+            $owner,
+            $inviteCode,
+        ),
+        'REFERRAL_CLAIM_FORBIDDEN',
+        403,
+    );
+
+    $this->assertDatabaseCount(
+        'business_referrals',
+        0,
+    );
+}
+
+public function test_suspended_business_cannot_claim_referral_through_service(): void
+{
+    $inviter = $this->makeBusiness([
+        'name' => 'Referral Inviter',
+    ]);
+
+    $referred = $this->makeBusiness([
+        'name' => 'Suspended Referral Friend',
+    ]);
+
+    $owner = $this->makeMember(
+        $referred,
+        BusinessRole::Owner,
+    );
+
+    $inviteCode = $this->service
+        ->profileFor($inviter)
+        ->invite_code;
+
+    /*
+     * Keep the owner and membership valid. Only the business
+     * itself becomes suspended.
+     */
+    $referred->forceFill([
+        'status' => AccountStatus::Suspended,
+    ])->save();
+
+    $this->assertDatabaseHas(
+        'businesses',
+        [
+            'id' => $referred->id,
+            'status' => AccountStatus::Suspended->value,
+        ],
+    );
+
+    $this->assertApiException(
+        fn() => $this->service->claim(
+            $referred,
+            $owner,
+            $inviteCode,
+        ),
+        'REFERRAL_CLAIM_FORBIDDEN',
+        403,
+    );
+
+    $this->assertDatabaseCount(
+        'business_referrals',
+        0,
+    );
+}
+public function test_stale_active_user_instance_cannot_bypass_suspension(): void
+{
+    $inviter = $this->makeBusiness([
+        'name' => 'Referral Inviter',
+    ]);
+
+    $referred = $this->makeBusiness([
+        'name' => 'Referral Friend',
+    ]);
+
+    $owner = $this->makeMember(
+        $referred,
+        BusinessRole::Owner,
+    );
+
+    $inviteCode = $this->service
+        ->profileFor($inviter)
+        ->invite_code;
+
+    /*
+     * Keep this model instance stale and apparently active.
+     * Change the authoritative database row directly.
+     */
+    $this->assertSame(
+        AccountStatus::Active,
+        $owner->status,
+    );
+
+    User::query()
+        ->whereKey($owner->id)
+        ->update([
+            'status' => AccountStatus::Suspended->value,
+        ]);
+
+    /*
+     * The object passed to ReferralService still says "active".
+     */
+    $this->assertSame(
+        AccountStatus::Active,
+        $owner->status,
+    );
+
+    $this->assertApiException(
+        fn() => $this->service->claim(
+            $referred,
+            $owner,
+            $inviteCode,
+        ),
+        'REFERRAL_CLAIM_FORBIDDEN',
+        403,
+    );
+
+    $this->assertDatabaseCount(
+        'business_referrals',
+        0,
+    );
+}
+
+public function test_successful_referral_claim_is_audited(): void
+{
+    $inviter = $this->makeBusiness([
+        'name' => 'Audit Inviter',
+    ]);
+
+    $profile = $this->service->profileFor(
+        $inviter,
+    );
+
+    $referred = $this->makeBusiness([
+        'name' => 'Audit Friend',
+    ]);
+
+    $owner = $this->makeMember(
+        $referred,
+        BusinessRole::Owner,
+    );
+
+    $referral = $this->service->claim(
+        $referred,
+        $owner,
+        $profile->invite_code,
+    );
+
+    $this->assertDatabaseHas(
+        'audit_logs',
+        [
+            'business_id' => $referred->id,
+            'actor_user_id' => $owner->id,
+            'action' => 'referral.claimed',
+            'target_type' => 'BusinessReferral',
+            'target_id' => $referral->id,
+        ],
+    );
+}
+
+public function test_referral_claim_retry_does_not_duplicate_audit_event(): void
+{
+    $inviter = $this->makeBusiness();
+
+    $profile = $this->service->profileFor(
+        $inviter,
+    );
+
+    $referred = $this->makeBusiness();
+
+    $owner = $this->makeMember(
+        $referred,
+        BusinessRole::Owner,
+    );
+
+    $this->service->claim(
+        $referred,
+        $owner,
+        $profile->invite_code,
+    );
+
+    /*
+     * Same business + same inviter is an idempotent retry.
+     */
+    $this->service->claim(
+        $referred,
+        $owner,
+        $profile->invite_code,
+    );
+
+    $this->assertSame(
+        1,
+        \App\Models\AuditLog::query()
+            ->where(
+                'business_id',
+                $referred->id,
+            )
+            ->where(
+                'action',
+                'referral.claimed',
+            )
+            ->where(
+                'target_type',
+                'BusinessReferral',
+            )
+            ->count(),
+    );
+}
     private function assertApiException(
         callable $callback,
         string $code,

@@ -33,8 +33,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'OWNER00001',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'OWNER00001',
+            'payer_number'   => '01712345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -74,8 +74,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 3,
-            'trx_id' => 'ADMIN00001',
-            'payer_number' => '01812345678',
+            'trx_id'         => 'ADMIN00001',
+            'payer_number'   => '01812345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -116,8 +116,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 6,
-            'trx_id' => 'LIST000001',
-            'payer_number' => '01912345678',
+            'trx_id'         => 'LIST000001',
+            'payer_number'   => '01912345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -187,8 +187,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 12,
-            'trx_id' => 'APPROVE001',
-            'payer_number' => '01612345678',
+            'trx_id'         => 'APPROVE001',
+            'payer_number'   => '01612345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -264,8 +264,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'RETRY00001',
-            'payer_number' => '01512345678',
+            'trx_id'         => 'RETRY00001',
+            'payer_number'   => '01512345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -312,8 +312,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'REJECT0001',
-            'payer_number' => '01312345678',
+            'trx_id'         => 'REJECT0001',
+            'payer_number'   => '01312345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -373,8 +373,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $response = $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'REASON0001',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'REASON0001',
+            'payer_number'   => '01712345678',
         ])->assertCreated();
 
         $paymentId = $response->json('data.id');
@@ -416,8 +416,8 @@ class PlatformPlanPaymentApiTest extends TestCase
 
         $this->postJson('/api/v1/payments', [
             'package_months' => 1,
-            'trx_id' => 'UUID000001',
-            'payer_number' => '01712345678',
+            'trx_id'         => 'UUID000001',
+            'payer_number'   => '01712345678',
         ])->assertCreated();
 
         $payment = PlanPaymentRequest::query()->sole();
@@ -437,6 +437,154 @@ class PlatformPlanPaymentApiTest extends TestCase
         $this->assertSame(
             PlanPaymentStatus::Pending,
             $payment->refresh()->status,
+        );
+    }
+
+    public function test_client_cannot_spoof_platform_admin_when_approving_payment(): void
+    {
+        [, $owner] = $this->makeAuthorizedMember(
+            BusinessRole::Owner,
+        );
+
+        Sanctum::actingAs($owner);
+
+        $response = $this->postJson('/api/v1/payments', [
+            'package_months' => 1,
+            'trx_id'         => 'SPOOF00001',
+            'payer_number'   => '01712345678',
+        ])->assertCreated();
+
+        $paymentId = $response->json('data.id');
+
+        /*
+         * Create another Platform Admin whose ID the attacker
+         * will try to inject into the approval request.
+         */
+        [, $otherAdminUser] = $this->makeAuthorizedMember(
+            BusinessRole::ReadOnlyStaff,
+        );
+
+        $otherAdmin = $this->makePlatformAdmin(
+            $otherAdminUser,
+        );
+
+        /*
+         * This is the real authenticated Platform Admin.
+         */
+        [, $realAdminUser] = $this->makeAuthorizedMember(
+            BusinessRole::ReadOnlyStaff,
+        );
+
+        $realAdmin = $this->makePlatformAdmin(
+            $realAdminUser,
+        );
+
+        Sanctum::actingAs($realAdminUser);
+
+        $this->postJson(
+            "/api/v1/platform/plan-payments/{$paymentId}/approve",
+            [
+                // Malicious/untrusted fields.
+                'decided_by_platform_admin_id' => $otherAdmin->id,
+                'status'                       => 'rejected',
+                'applied_at'                   => now()->addYears(10)->toISOString(),
+            ],
+        )
+            ->assertOk()
+            ->assertJsonPath(
+                'data.status',
+                'approved',
+            );
+
+        $payment = PlanPaymentRequest::query()
+            ->where('uuid', $paymentId)
+            ->firstOrFail();
+
+        /*
+         * The authenticated middleware-provided Platform Admin
+         * must always be authoritative.
+         */
+        $this->assertSame(
+            $realAdmin->id,
+            $payment->decided_by_platform_admin_id,
+        );
+
+        $this->assertNotSame(
+            $otherAdmin->id,
+            $payment->decided_by_platform_admin_id,
+        );
+
+        $this->assertSame(
+            PlanPaymentStatus::Approved,
+            $payment->status,
+        );
+    }
+
+    public function test_tenant_cannot_list_or_reject_platform_payments(): void
+    {
+        [, $owner] = $this->makeAuthorizedMember(
+            BusinessRole::Owner,
+        );
+
+        Sanctum::actingAs($owner);
+
+        $response = $this->postJson('/api/v1/payments', [
+            'package_months' => 1,
+            'trx_id'         => 'DENY000001',
+            'payer_number'   => '01712345678',
+        ])->assertCreated();
+
+        $paymentId = $response->json('data.id');
+
+        /*
+         * A tenant Owner is still not a Platform Admin.
+         * Platform-wide payment history must not be visible.
+         */
+        $this->getJson('/api/v1/platform/plan-payments')
+            ->assertStatus(403)
+            ->assertJsonPath(
+                'code',
+                'PLATFORM_ADMIN_FORBIDDEN',
+            );
+
+        /*
+         * The tenant must also be unable to reject its own
+         * payment request.
+         */
+        $this->postJson(
+            "/api/v1/platform/plan-payments/{$paymentId}/reject",
+            [
+                'reason' => 'Attempted tenant rejection.',
+            ],
+        )
+            ->assertStatus(403)
+            ->assertJsonPath(
+                'code',
+                'PLATFORM_ADMIN_FORBIDDEN',
+            );
+
+        /*
+         * Failed authorization must not mutate the payment.
+         */
+        $payment = PlanPaymentRequest::query()
+            ->where('uuid', $paymentId)
+            ->firstOrFail();
+
+        $this->assertSame(
+            PlanPaymentStatus::Pending,
+            $payment->status,
+        );
+
+        $this->assertNull(
+            $payment->rejection_reason,
+        );
+
+        $this->assertNull(
+            $payment->decided_by_platform_admin_id,
+        );
+
+        $this->assertNull(
+            $payment->decided_at,
         );
     }
 
@@ -461,7 +609,7 @@ class PlatformPlanPaymentApiTest extends TestCase
     private function activateUser($user): void
     {
         $user->forceFill([
-            'status' => 'active',
+            'status'            => 'active',
             'email_verified_at' => now(),
         ])->save();
     }
@@ -471,7 +619,7 @@ class PlatformPlanPaymentApiTest extends TestCase
     ): PlatformAdmin {
         return PlatformAdmin::query()->create([
             'user_id' => $user->id,
-            'status' => 'active',
+            'status'  => 'active',
         ]);
     }
 }

@@ -12,13 +12,21 @@ use App\Models\Business;
 use App\Models\BusinessReferral;
 use App\Models\BusinessSubscription;
 use App\Models\PlanPaymentRequest;
+use App\Models\PlatformAdmin;
 use App\Models\ReferralReward;
+use App\Services\Auth\AuditLogger;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use LogicException;
 
 final class ReferralQualificationService
 {
+
+    public function __construct(
+        private AuditLogger $auditLogger,
+    ) {
+    }
+
     /**
      * Qualify a previously claimed referral after the referred
      * business has a confirmed, server-applied paid Unlimited payment.
@@ -92,7 +100,7 @@ final class ReferralQualificationService
                 $referral->claimed_at === null
                 || $payment->decided_at === null
                 || $referral->claimed_at->getTimestamp()
-                    > $payment->decided_at->getTimestamp()
+                > $payment->decided_at->getTimestamp()
             ) {
                 return $referral->refresh();
             }
@@ -154,7 +162,7 @@ final class ReferralQualificationService
             if (
                 $sequence < 1
                 || $sequence
-                    > ReferralRules::MAX_QUALIFYING_REFERRALS
+                > ReferralRules::MAX_QUALIFYING_REFERRALS
             ) {
                 throw $this->stateInvalid(
                     'The referral qualification sequence is invalid.'
@@ -179,12 +187,12 @@ final class ReferralQualificationService
              * underlying Free and therefore receives +7 days.
              */
             $paidInviter =
-                $subscription !== null
-                && $subscription->access_source === 'paid'
-                && PlanResolver::isUnlimited(
-                    $subscription,
-                    $now,
-                );
+            $subscription !== null
+            && $subscription->access_source === 'paid'
+            && PlanResolver::isUnlimited(
+                $subscription,
+                $now,
+            );
 
             if ($paidInviter) {
                 $reward = $this->createRenewalDiscountReward(
@@ -212,17 +220,17 @@ final class ReferralQualificationService
              * If either operation fails, neither is committed.
              */
             $referral->forceFill([
-                'status' =>
-                    ReferralStatus::Qualified,
+                'status'                        =>
+                ReferralStatus::Qualified,
 
                 'qualifying_payment_request_id' =>
-                    $payment->id,
+                $payment->id,
 
-                'qualified_at' =>
-                    $now,
+                'qualified_at'                  =>
+                $now,
 
-                'qualification_sequence' =>
-                    $sequence,
+                'qualification_sequence'        =>
+                $sequence,
             ])->save();
 
             /*
@@ -237,6 +245,32 @@ final class ReferralQualificationService
                 );
             }
 
+/*
+ * Attribute qualification to the platform administrator whose
+ * approval caused this referral to qualify.
+ */
+            $decidingAdmin = PlatformAdmin::query()
+                ->with('user')
+                ->findOrFail(
+                    $payment->decided_by_platform_admin_id,
+                );
+
+/*
+ * Record only the actual Claimed -> Qualified transition.
+ *
+ * The earlier Qualified idempotent return never reaches this point,
+ * so retries cannot create duplicate qualification audit events.
+ *
+ * Reward amounts and payment identifiers are deliberately excluded
+ * from generic audit metadata.
+ */
+            $this->auditLogger->record(
+                'referral.qualified',
+                $decidingAdmin->user,
+                $inviter->id,
+                $referral,
+            );
+
             return $referral->refresh();
         });
     }
@@ -246,9 +280,9 @@ final class ReferralQualificationService
     ): void {
         if (
             $payment->product_type
-                !== PlanPaymentProduct::Unlimited
+            !== PlanPaymentProduct::Unlimited
             || $payment->status
-                !== PlanPaymentStatus::Approved
+            !== PlanPaymentStatus::Approved
             || $payment->decided_by_platform_admin_id === null
             || $payment->decided_at === null
             || $payment->applied_at === null
@@ -295,20 +329,20 @@ final class ReferralQualificationService
         Business $inviter,
     ): ReferralReward {
         return ReferralReward::create([
-            'referral_id' =>
-                $referral->id,
+            'referral_id'             =>
+            $referral->id,
 
             'beneficiary_business_id' =>
-                $inviter->id,
+            $inviter->id,
 
-            'reward_type' =>
-                ReferralRewardType::RenewalDiscountBdt,
+            'reward_type'             =>
+            ReferralRewardType::RenewalDiscountBdt,
 
-            'unlimited_days' =>
-                null,
+            'unlimited_days'          =>
+            null,
 
-            'discount_bdt' =>
-                ReferralRules::PAID_RENEWAL_DISCOUNT_BDT,
+            'discount_bdt'            =>
+            ReferralRules::PAID_RENEWAL_DISCOUNT_BDT,
         ]);
     }
 
@@ -318,31 +352,31 @@ final class ReferralQualificationService
         CarbonImmutable $appliedAt,
     ): ReferralReward {
         $reward = ReferralReward::create([
-            'referral_id' =>
-                $referral->id,
+            'referral_id'             =>
+            $referral->id,
 
             'beneficiary_business_id' =>
-                $inviter->id,
+            $inviter->id,
 
-            'reward_type' =>
-                ReferralRewardType::UnlimitedDays,
+            'reward_type'             =>
+            ReferralRewardType::UnlimitedDays,
 
-            'unlimited_days' =>
-                ReferralRules::FREE_REWARD_DAYS,
+            'unlimited_days'          =>
+            ReferralRules::FREE_REWARD_DAYS,
 
-            'discount_bdt' =>
-                null,
+            'discount_bdt'            =>
+            null,
         ]);
 
         /*
          * +7-day rewards are applied immediately.
          */
         $reward->forceFill([
-            'status' =>
-                ReferralRewardStatus::Applied,
+            'status'     =>
+            ReferralRewardStatus::Applied,
 
             'applied_at' =>
-                $appliedAt,
+            $appliedAt,
         ])->save();
 
         return $reward->refresh();
@@ -391,9 +425,9 @@ final class ReferralQualificationService
 
             $subscription->forceFill([
                 'access_ends_at' =>
-                    CarbonImmutable::instance(
-                        $subscription->access_ends_at,
-                    )->addDays($days),
+                CarbonImmutable::instance(
+                    $subscription->access_ends_at,
+                )->addDays($days),
             ])->save();
 
             return;
@@ -413,17 +447,17 @@ final class ReferralQualificationService
         }
 
         $subscription->forceFill([
-            'tier' =>
-                PlanLimits::UNLIMITED,
+            'tier'             =>
+            PlanLimits::UNLIMITED,
 
-            'access_source' =>
-                'referral',
+            'access_source'    =>
+            'referral',
 
             'access_starts_at' =>
-                $now,
+            $now,
 
-            'access_ends_at' =>
-                $now->addDays($days),
+            'access_ends_at'   =>
+            $now->addDays($days),
         ])->save();
     }
 
@@ -436,7 +470,7 @@ final class ReferralQualificationService
             || $referral->qualification_sequence === null
             || $referral->qualification_sequence < 1
             || $referral->qualification_sequence
-                > ReferralRules::MAX_QUALIFYING_REFERRALS
+            > ReferralRules::MAX_QUALIFYING_REFERRALS
         ) {
             throw $this->stateInvalid(
                 'The qualified referral has incomplete qualification state.'
@@ -445,11 +479,11 @@ final class ReferralQualificationService
 
         if (
             !ReferralReward::query()
-                ->where(
-                    'referral_id',
-                    $referral->id,
-                )
-                ->exists()
+            ->where(
+                'referral_id',
+                $referral->id,
+            )
+            ->exists()
         ) {
             throw $this->stateInvalid(
                 'The qualified referral does not have its reward.'

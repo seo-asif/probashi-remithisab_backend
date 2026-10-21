@@ -10,6 +10,7 @@ use App\Models\BusinessMembership;
 use App\Models\BusinessReferral;
 use App\Models\BusinessReferralProfile;
 use App\Models\User;
+use App\Services\Auth\AuditLogger;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use LogicException;
@@ -30,6 +31,7 @@ final class ReferralService
 
     public function __construct(
         private TrialService $trialService,
+        private AuditLogger $auditLogger,
     ) {
     }
 
@@ -172,6 +174,17 @@ final class ReferralService
                 );
             }
 
+/*
+ * Do not rely only on business.context middleware.
+ *
+ * The business row has been reloaded and locked inside this
+ * transaction, so its status is authoritative. Direct service
+ * calls must not allow suspended businesses to claim referrals.
+ */
+            if ($lockedBusiness->status !== AccountStatus::Active) {
+                throw $this->claimForbidden();
+            }
+
             $membership = $this->claimingMembership(
                 $lockedBusiness,
                 $claimedBy,
@@ -248,6 +261,21 @@ final class ReferralService
                 $membership,
             );
 
+/*
+ * Audit only the actual creation of the referral.
+ *
+ * The earlier same-inviter idempotent return does not reach this
+ * point, so retrying the same claim cannot create duplicate events.
+ *
+ * Never store the invite code in audit metadata.
+ */
+            $this->auditLogger->record(
+                'referral.claimed',
+                $claimedBy,
+                $lockedBusiness->id,
+                $referral,
+            );
+
             return $referral->refresh();
         });
     }
@@ -266,17 +294,46 @@ final class ReferralService
         Business $business,
         User $user,
     ): BusinessMembership {
-        if ($user->status !== AccountStatus::Active) {
-            throw $this->claimForbidden();
-        }
-
-        $membership = BusinessMembership::query()
-            ->where('business_id', $business->id)
-            ->where('user_id', $user->id)
+        /*
+         * Do not trust the User model instance supplied by the caller.
+         *
+         * ReferralService can be invoked directly without HTTP middleware,
+         * so reload and lock authoritative user state inside this transaction.
+         */
+        $eligibleUser = User::query()
+            ->whereKey($user->id)
             ->where(
                 'status',
                 AccountStatus::Active->value,
             )
+            ->whereNotNull(
+                'email_verified_at',
+            )
+            ->lockForUpdate()
+            ->first();
+
+        if ($eligibleUser === null) {
+            throw $this->claimForbidden();
+        }
+
+        /*
+         * The claimant must hold an active membership in this exact
+         * business and must be an Owner or Administrator.
+         */
+        $membership = BusinessMembership::query()
+            ->where(
+                'business_id',
+                $business->id,
+            )
+            ->where(
+                'user_id',
+                $eligibleUser->id,
+            )
+            ->where(
+                'status',
+                AccountStatus::Active->value,
+            )
+            ->lockForUpdate()
             ->first();
 
         if (
@@ -331,11 +388,10 @@ final class ReferralService
             throw $e;
         }
 
-       $referral->forceFill([
-    'referred_trial_granted_at' =>
-        $subscription->trial_used_at
-        ?? CarbonImmutable::now('UTC'),
-]);
+        $referral->forceFill([
+            'referred_trial_granted_at' =>
+            $subscription->trial_used_at ?? CarbonImmutable::now('UTC'),
+        ]);
 
         $referral->save();
     }
