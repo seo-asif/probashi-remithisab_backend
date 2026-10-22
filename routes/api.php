@@ -29,6 +29,8 @@ use App\Http\Controllers\Api\V1\Reports\ReportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
 use App\Http\Controllers\Api\V1\Sender\RecipientController;
 use App\Http\Controllers\Api\V1\Sender\RemittanceController as SenderRemittanceController;
+use App\Http\Controllers\Api\V1\Support\VerificationCodeController;
+use App\Http\Controllers\Api\V1\Support\VerifyCodeController;
 use App\Http\Controllers\Api\V1\Work\WorkController;
 use Illuminate\Support\Facades\Route;
 
@@ -51,12 +53,23 @@ Route::prefix('v1')->group(function () {
 
     // ---- logged in (any account state that holds a token)
     Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+
         Route::post('/auth/logout', LogoutController::class);
         Route::post('/auth/logout-all', LogoutAllController::class);
         Route::post('/auth/change-password', ChangePasswordController::class);
 
         Route::post('/auth/google/link', GoogleLinkController::class);
         Route::delete('/auth/google', GoogleUnlinkController::class);
+
+        Route::post(
+            '/support/verification-code',
+            VerificationCodeController::class
+        )->middleware('throttle:support-code-send');
+
+        Route::post(
+            '/support/verification-code/verify',
+            VerifyCodeController::class
+        )->middleware('throttle:support-code-verify');
     });
 
     // ---- logged in AND inside a business (verified email, active account, one active business)

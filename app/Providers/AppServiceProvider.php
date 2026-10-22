@@ -49,5 +49,23 @@ class AppServiceProvider extends ServiceProvider
             Limit::perMinutes(10, 10)->by('otp-verify:' . $email($request) . '|' . $request->ip()),
             Limit::perMinute(30)->by('otp-verify-ip:' . $request->ip()),
         ]);
+
+        RateLimiter::for('support-code-send', fn (Request $request) => [
+    Limit::perMinute(1)->by(
+        'support-send-user:' . ($request->user()?->id ?: $request->ip())
+    ),
+    Limit::perHour(5)->by(
+        'support-send-hour:' . ($request->user()?->id ?: $request->ip())
+    ),
+]);
+
+RateLimiter::for('support-code-verify', fn (Request $request) => [
+    Limit::perMinutes(10, 10)->by(
+        'support-verify-user:' . ($request->user()?->id ?: $request->ip())
+    ),
+    Limit::perMinute(30)->by(
+        'support-verify-ip:' . $request->ip()
+    ),
+]);
     }
 }
