@@ -23,12 +23,14 @@ class TransactionQuotaRefundTest extends TestCase
         $this->deleteJson("/api/v1/sender-remittances/{$remittance['id']}")->assertOk();
         $this->assertSenderUsed($business->id, $user->id, 0);
 
-        $record = SenderRemittance::withTrashed()->where('uuid', $remittance['id'])->firstOrFail();
+        $record = $this->findSenderRecord($business->id, $user->id, $remittance['id']);
         $this->assertNotNull($record->quota_refunded_at);
 
         $this->postJson("/api/v1/sender-remittances/{$remittance['id']}/restore")->assertOk();
         $this->assertSenderUsed($business->id, $user->id, 1);
-        $this->assertNotNull($record->fresh()->quota_refund_reapplied_at);
+        $this->assertNotNull(
+            $this->findSenderRecord($business->id, $user->id, $remittance['id'])->quota_refund_reapplied_at
+        );
 
         // Repeated restore and second delete cannot credit the same creation twice.
         $this->postJson("/api/v1/sender-remittances/{$remittance['id']}/restore")->assertOk();
@@ -61,12 +63,14 @@ class TransactionQuotaRefundTest extends TestCase
         $this->deleteJson("/api/v1/manager-transactions/{$transaction['id']}")->assertOk();
         $this->assertManagerUsed($business->id, 0);
 
-        $record = ManagerTransaction::withTrashed()->where('uuid', $transaction['id'])->firstOrFail();
+        $record = $this->findManagerRecord($business->id, $transaction['id']);
         $this->assertNotNull($record->quota_refunded_at);
 
         $this->postJson("/api/v1/manager-transactions/{$transaction['id']}/restore")->assertOk();
         $this->assertManagerUsed($business->id, 1);
-        $this->assertNotNull($record->fresh()->quota_refund_reapplied_at);
+        $this->assertNotNull(
+            $this->findManagerRecord($business->id, $transaction['id'])->quota_refund_reapplied_at
+        );
 
         $this->deleteJson("/api/v1/manager-transactions/{$transaction['id']}")->assertOk();
         $this->assertManagerUsed($business->id, 1);
@@ -102,7 +106,7 @@ class TransactionQuotaRefundTest extends TestCase
 
         $this->assertSenderUsed($business->id, $user->id, 20);
         $this->assertNotNull(
-            SenderRemittance::withTrashed()->where('uuid', $first['id'])->firstOrFail()->deleted_at
+            $this->findSenderRecord($business->id, $user->id, $first['id'])->deleted_at
         );
     }
 
@@ -123,7 +127,7 @@ class TransactionQuotaRefundTest extends TestCase
 
         $this->assertManagerUsed($business->id, 20);
         $this->assertNotNull(
-            ManagerTransaction::withTrashed()->where('uuid', $first['id'])->firstOrFail()->deleted_at
+            $this->findManagerRecord($business->id, $first['id'])->deleted_at
         );
     }
 
@@ -158,6 +162,29 @@ class TransactionQuotaRefundTest extends TestCase
             'user_id' => $user->id,
             'period_start' => '2026-11-01',
         ]);
+    }
+
+    /**
+     * Test-only direct database lookup, explicitly constrained to the expected
+     * business and owner. Production HTTP queries retain fail-closed scopes.
+     */
+    private function findSenderRecord(int $businessId, int $userId, string $uuid): SenderRemittance
+    {
+        return SenderRemittance::withoutGlobalScopes()
+            ->withTrashed()
+            ->where('business_id', $businessId)
+            ->where('owner_user_id', $userId)
+            ->where('uuid', $uuid)
+            ->firstOrFail();
+    }
+
+    private function findManagerRecord(int $businessId, string $uuid): ManagerTransaction
+    {
+        return ManagerTransaction::withoutGlobalScopes()
+            ->withTrashed()
+            ->where('business_id', $businessId)
+            ->where('uuid', $uuid)
+            ->firstOrFail();
     }
 
     private function assertSenderUsed(int $businessId, int $userId, int $used): void
