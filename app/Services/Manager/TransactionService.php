@@ -175,28 +175,48 @@ final class TransactionService
 
     public function delete(ManagerTransaction $tx): void
     {
-        DB::transaction(function () use ($tx) {
-            $tx->delete(); // payments stay with it, so a restore brings everything back
-            MoneyAudit::record('deleted', $tx);
+        DB::transaction(function () use ($tx): void {
+            $locked = ManagerTransaction::withTrashed()
+                ->whereKey($tx->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($locked->trashed()) {
+                return;
+            }
+
+            $this->quota->refundManagerTransaction($locked);
+            $locked->delete(); // BDT payments remain available upon restore.
+            MoneyAudit::record('deleted', $locked);
         });
     }
 
     public function restore(ManagerTransaction $tx): ManagerTransaction
     {
-        if (!$tx->trashed()) {
-            return $tx;
-        }
+        return DB::transaction(function () use ($tx): ManagerTransaction {
+            $locked = ManagerTransaction::withTrashed()
+                ->whereKey($tx->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        if ($tx->customer === null || $tx->customer->trashed()) {
-            throw new ApiException('CUSTOMER_DELETED', 'The customer of this transaction was deleted. Restore the customer first.', 409);
-        }
+            if (!$locked->trashed()) {
+                return $locked;
+            }
 
-        DB::transaction(function () use ($tx) {
-            $tx->restore();
-            MoneyAudit::record('restored', $tx);
+            if ($locked->customer === null || $locked->customer->trashed()) {
+                throw new ApiException(
+                    'CUSTOMER_DELETED',
+                    'The customer of this transaction was deleted. Restore the customer first.',
+                    409
+                );
+            }
+
+            $this->quota->reapplyManagerTransaction($locked);
+            $locked->restore();
+            MoneyAudit::record('restored', $locked);
+
+            return $locked->refresh();
         });
-
-        return $tx->refresh();
     }
 
     // ------------------------------------------------------------------ payments

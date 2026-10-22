@@ -23,7 +23,13 @@ class SenderRemittance extends Model
 
     protected function casts(): array
     {
-        return ['received' => 'boolean', 'received_at' => 'immutable_datetime', 'occurred_at' => 'immutable_datetime'];
+        return [
+            'received' => 'boolean',
+            'received_at' => 'immutable_datetime',
+            'occurred_at' => 'immutable_datetime',
+            'quota_refunded_at' => 'datetime',
+            'quota_refund_reapplied_at' => 'datetime',
+        ];
     }
 
     public function recipient(): BelongsTo

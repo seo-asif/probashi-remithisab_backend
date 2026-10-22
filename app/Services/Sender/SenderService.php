@@ -211,22 +211,38 @@ final class SenderService
 
     public function deleteRemittance(SenderRemittance $r): void
     {
-        DB::transaction(function () use ($r) {
-            $r->delete();
-            MoneyAudit::record('deleted', $r);
+        DB::transaction(function () use ($r): void {
+            $locked = SenderRemittance::withTrashed()
+                ->whereKey($r->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($locked->trashed()) {
+                return;
+            }
+
+            $this->quota->refundSenderRemittance($locked);
+            $locked->delete();
+            MoneyAudit::record('deleted', $locked);
         });
     }
 
     public function restoreRemittance(SenderRemittance $r): SenderRemittance
     {
-        if ($r->trashed()) {
-            DB::transaction(function () use ($r) {
-                $r->restore();
-                MoneyAudit::record('restored', $r);
-            });
-        }
+        return DB::transaction(function () use ($r): SenderRemittance {
+            $locked = SenderRemittance::withTrashed()
+                ->whereKey($r->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        return $r->refresh();
+            if ($locked->trashed()) {
+                $this->quota->reapplySenderRemittance($locked);
+                $locked->restore();
+                MoneyAudit::record('restored', $locked);
+            }
+
+            return $locked->refresh();
+        });
     }
 
     /** Checks the FINAL record (stored values merged with the changes) and computes every total. */

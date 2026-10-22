@@ -27,6 +27,8 @@ class ManagerTransaction extends Model
             'bank'           => 'encrypted:array',
             'sending_number' => 'encrypted',
             'occurred_at'    => 'immutable_datetime',
+            'quota_refunded_at' => 'datetime',
+            'quota_refund_reapplied_at' => 'datetime',
         ];
     }
 
