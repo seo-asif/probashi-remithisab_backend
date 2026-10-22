@@ -89,22 +89,10 @@ final class SenderService
         }
 
         DB::transaction(function () use ($r) {
-    $business = $this->current->get();
-    $userId = $this->current->userId();
-
-    if ($business === null || $userId === null) {
-        throw new \LogicException(
-            'Family member restore requires a current business and user.'
-        );
-    }
-
-    $this->quota->assertFamilyMemberAvailable(
-        $business,
-        $userId,
-    );
-
-    $r->restore();
-});
+            // Restore reuses the existing identity and its original quota slot.
+            // It remains allowed after a paid plan expires.
+            $r->restore();
+        });
 
         return $r->refresh();
     }

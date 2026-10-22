@@ -164,8 +164,8 @@ final class PlanQuotaService
 /**
  * Check whether this user may have one more active family member.
  *
- * This is an active-record cap, not a monthly counter.
- * Soft-deleted family members do not consume a slot.
+ * This is a lifetime-created-profile cap, not a monthly counter.
+ * Archived (soft-deleted) profiles still consume the original slot.
  */
     public function assertFamilyMemberAvailable(
         Business $business,
@@ -185,7 +185,7 @@ final class PlanQuotaService
         $used = SenderRecipient::withoutGlobalScopes()
             ->where('business_id', $business->id)
             ->where('owner_user_id', $userId)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $limit = PlanLimits::FREE_FAMILY_MEMBERS;
@@ -193,7 +193,7 @@ final class PlanQuotaService
         if ($used >= $limit) {
             $this->activeLimitReached(
                 'PLAN_FAMILY_LIMIT',
-                'Your active family member limit has been reached.',
+                'Your Free family profile creation limit has been reached.',
                 $limit,
                 $used,
                 $tier,
@@ -204,8 +204,8 @@ final class PlanQuotaService
 /**
  * Check whether this business may have one more active Manager customer.
  *
- * This is an active-record cap, not a monthly counter.
- * Soft-deleted customers do not consume a slot.
+ * This is a lifetime-created-profile cap, not a monthly counter.
+ * Archived (soft-deleted) profiles still consume the original slot.
  */
     public function assertCustomerAvailable(
         Business $business,
@@ -223,7 +223,7 @@ final class PlanQuotaService
 
         $used = Customer::withoutGlobalScopes()
             ->where('business_id', $business->id)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $limit = PlanLimits::FREE_CUSTOMERS;
@@ -231,7 +231,7 @@ final class PlanQuotaService
         if ($used >= $limit) {
             $this->activeLimitReached(
                 'PLAN_CUSTOMER_LIMIT',
-                'Your active customer limit has been reached.',
+                'Your Free customer profile creation limit has been reached.',
                 $limit,
                 $used,
                 $tier,

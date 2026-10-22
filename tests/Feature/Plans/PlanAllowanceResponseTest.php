@@ -250,7 +250,7 @@ class PlanAllowanceResponseTest extends TestCase
             );
     }
 
-    public function test_soft_deleted_family_and_customers_do_not_use_active_slots(): void
+    public function test_archived_family_and_customers_still_count_against_creation_cap(): void
     {
         $business = $this->makeBusiness([
             'timezone' => 'Pacific/Fiji',
@@ -288,11 +288,11 @@ class PlanAllowanceResponseTest extends TestCase
             ->assertOk()
             ->assertJsonPath(
                 'data.plan.allowances.family_members.used',
-                1,
+                2,
             )
             ->assertJsonPath(
                 'data.plan.allowances.customers.used',
-                1,
+                2,
             );
     }
 

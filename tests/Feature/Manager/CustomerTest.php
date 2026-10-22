@@ -147,16 +147,25 @@ class CustomerTest extends TestCase
             ->assertStatus(409)->assertJsonPath('code', 'DUPLICATE_CUSTOMER')->assertJsonPath('data.customer.id', $second['id']);
     }
 
-    public function test_a_customer_with_records_cannot_be_deleted(): void
+    public function test_customer_with_transactions_can_be_archived_without_losing_history(): void
     {
         $this->actAs($this->makeBusiness());
         $customer = $this->customer();
         $this->transaction($customer['id']);
 
         $this->deleteJson("/api/v1/customers/{$customer['id']}")
-            ->assertStatus(409)
-            ->assertJsonPath('code', 'CUSTOMER_HAS_RECORDS')
-            ->assertJsonPath('message', 'This customer has 1 record. Delete those records first.');
+            ->assertOk();
+
+        $this->getJson("/api/v1/customers/{$customer['id']}")
+            ->assertOk()
+            ->assertJsonPath('data.summary.transactions', 1);
+
+        $this->postJson("/api/v1/customers/{$customer['id']}/restore")
+            ->assertOk();
+
+        $this->getJson("/api/v1/customers/{$customer['id']}")
+            ->assertOk()
+            ->assertJsonPath('data.summary.transactions', 1);
     }
 
     public function test_sending_the_same_create_twice_saves_one_customer(): void

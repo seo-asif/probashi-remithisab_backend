@@ -81,12 +81,12 @@ final class PlanAllowanceService
         $familyUsed = SenderRecipient::withoutGlobalScopes()
             ->where('business_id', $business->id)
             ->where('owner_user_id', $userId)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $customersUsed = Customer::withoutGlobalScopes()
             ->where('business_id', $business->id)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $senderLimit = PlanLimits::FREE_SENDER_REMITTANCES
@@ -178,6 +178,10 @@ final class PlanAllowanceService
         ];
     }
 
+    /**
+     * Existing API shape retained; 'used' now counts created profiles,
+     * INCLUDING archived ones, so archiving cannot replenish the cap.
+     */
     private function activeAllowance(
         string $scope,
         ?int $limit,
