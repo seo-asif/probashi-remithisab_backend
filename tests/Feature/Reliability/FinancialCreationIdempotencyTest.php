@@ -104,4 +104,58 @@ final class FinancialCreationIdempotencyTest extends TestCase
         $this->assertSame(1, BdtPayment::withoutGlobalScopes()->count());
         $this->assertSame(1, AuditLog::query()->where('action', 'manager_transaction.payment_added')->count());
     }
+    public function test_reversal_uuid_retry_returns_original_without_second_reversal_or_audit(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $customer = $this->customer();
+        $transaction = $this->transaction($customer['id']);
+        $payment = $this->pay($transaction['id'], '500')->assertCreated()->json('data.payment');
+        $requestId = $this->uuid();
+        $url = "/api/v1/manager-transactions/{$transaction['id']}/payments/{$payment['id']}/reverse";
+
+        $first = $this->postJson($url, ['id' => $requestId])
+            ->assertCreated()
+            ->assertJsonPath('data.payment.id', $requestId)
+            ->assertJsonPath('data.transaction.paid_bdt', '0.00')
+            ->json('data.payment');
+
+        $this->postJson($url, ['id' => $requestId, 'note' => 'Network retry'])
+            ->assertCreated()
+            ->assertJsonPath('data.payment.id', $first['id'])
+            ->assertJsonPath('data.transaction.paid_bdt', '0.00');
+
+        $this->assertSame(2, BdtPayment::withoutGlobalScopes()->count());
+        $this->assertSame(1, AuditLog::query()->where('action', 'manager_transaction.payment_reversed')->count());
+
+        $this->postJson($url, ['id' => $this->uuid()])
+            ->assertStatus(422)
+            ->assertJsonPath('error_codes.payment.0', 'already_reversed');
+
+        $this->assertSame(2, BdtPayment::withoutGlobalScopes()->count());
+    }
+
+    public function test_reversal_uuid_cannot_be_reused_for_another_payment(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $customer = $this->customer();
+        $transaction = $this->transaction($customer['id']);
+        $first = $this->pay($transaction['id'], '400')->assertCreated()->json('data.payment');
+        $second = $this->pay($transaction['id'], '300')->assertCreated()->json('data.payment');
+        $requestId = $this->uuid();
+
+        $this->postJson(
+            "/api/v1/manager-transactions/{$transaction['id']}/payments/{$first['id']}/reverse",
+            ['id' => $requestId]
+        )->assertCreated();
+
+        $this->postJson(
+            "/api/v1/manager-transactions/{$transaction['id']}/payments/{$second['id']}/reverse",
+            ['id' => $requestId]
+        )->assertStatus(422)->assertJsonPath('error_codes.id.0', 'id_taken');
+
+        $this->getJson("/api/v1/manager-transactions/{$transaction['id']}")
+            ->assertOk()
+            ->assertJsonPath('data.paid_bdt', '300.00');
+    }
+
 }

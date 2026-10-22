@@ -285,27 +285,90 @@ final class TransactionService
         return [$payment->refresh(), true];
     }
 
-    /** A wrong payment is corrected by a reversal entry with the negative amount. */
+    /**
+     * Reverse an original payment at most once, even across concurrent requests.
+     * Repeating the same request UUID returns the saved reversal unchanged.
+     */
     public function reversePayment(ManagerTransaction $tx, BdtPayment $payment, array $input): BdtPayment
     {
-        if ((int) $payment->transaction_id !== (int) $tx->id) {
-            throw (new \Illuminate\Database\Eloquent\ModelNotFoundException())->setModel(BdtPayment::class);
-        }
-        if (bccomp(Dec::of($payment->amount_bdt), '0', 2) <= 0) {
-            Reject::fail(['payment' => ['cannot_reverse_reversal', 'A reversal cannot be reversed.']]);
-        }
-        if (BdtPayment::query()->where('reverses_payment_id', $payment->id)->exists()) {
-            Reject::fail(['payment' => ['already_reversed', 'This payment is already reversed.']]);
-        }
+        return DB::transaction(function () use ($tx, $payment, $input): BdtPayment {
+            $businessId = $this->current->id();
 
-        return DB::transaction(function () use ($tx, $payment, $input) {
-            $reversal = $this->insertPayment($tx, bcmul(Dec::of($payment->amount_bdt), '-1', 2), $this->today(), false, $payment->id, $input['note'] ?? null, $input['id'] ?? null);
-            MoneyAudit::record('payment_reversed', $tx, [], [], ['payment' => $payment->uuid, 'reversal' => $reversal->uuid, 'amount_bdt' => $reversal->amount_bdt]);
-            $this->recalculatePaid($tx);
-            $this->followMoney($tx);
+            if ($businessId === null) {
+                throw new \LogicException('Payment reversal requires a business context.');
+            }
+
+            // Same lock order as financial record creation: Business -> Transaction -> Payment.
+            \App\Models\Business::query()
+                ->whereKey($businessId)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $lockedTx = ManagerTransaction::query()
+                ->whereKey($tx->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $originalPayment = BdtPayment::query()
+                ->whereKey($payment->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ((int) $originalPayment->transaction_id !== (int) $lockedTx->getKey()) {
+                throw (new \Illuminate\Database\Eloquent\ModelNotFoundException())
+                    ->setModel(BdtPayment::class);
+            }
+
+            if (bccomp(Dec::of($originalPayment->amount_bdt), '0', 2) <= 0) {
+                Reject::fail([
+                    'payment' => ['cannot_reverse_reversal', 'A reversal cannot be reversed.'],
+                ]);
+            }
+
+            // A successful network retry is idempotent, including if the
+            // original payment is now marked reversed.
+            if ($existing = RecordId::existing(BdtPayment::class, $input['id'] ?? null)) {
+                if ((int) $existing->transaction_id !== (int) $lockedTx->getKey()
+                    || (int) $existing->reverses_payment_id !== (int) $originalPayment->getKey()
+                ) {
+                    Reject::fail([
+                        'id' => ['id_taken', 'This request id belongs to another payment.'],
+                    ]);
+                }
+
+                return $existing;
+            }
+
+            if (BdtPayment::query()
+                ->where('reverses_payment_id', $originalPayment->getKey())
+                ->exists()
+            ) {
+                Reject::fail([
+                    'payment' => ['already_reversed', 'This payment is already reversed.'],
+                ]);
+            }
+
+            $reversal = $this->insertPayment(
+                $lockedTx,
+                bcmul(Dec::of($originalPayment->amount_bdt), '-1', 2),
+                $this->today(),
+                false,
+                $originalPayment->getKey(),
+                $input['note'] ?? null,
+                $input['id'] ?? null,
+            );
+
+            MoneyAudit::record('payment_reversed', $lockedTx, [], [], [
+                'payment' => $originalPayment->uuid,
+                'reversal' => $reversal->uuid,
+                'amount_bdt' => $reversal->amount_bdt,
+            ]);
+
+            $this->recalculatePaid($lockedTx);
+            $this->followMoney($lockedTx);
 
             return $reversal->refresh();
-        });
+        }, 3);
     }
 
     // ------------------------------------------------------------------ status rules
