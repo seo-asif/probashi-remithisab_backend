@@ -56,7 +56,7 @@ final class Phase57PrivacyBoundaryTest extends TestCase
     public function test_manager_customer_snapshot_name_is_not_copied_to_audit_metadata(): void
     {
         $this->actAs($this->makeBusiness());
-        $customer = $this->customer(['name' => 'Sensitive Customer Name']);
+        $customer = $this->customer(['name' => 'Private Customer']);
 
         $this->transaction($customer['id']);
 
@@ -66,7 +66,7 @@ final class Phase57PrivacyBoundaryTest extends TestCase
 
         $this->assertArrayNotHasKey('customer_name', $audit->metadata['new']);
         $this->assertSame('500.00', $audit->metadata['new']['amount']);
-        $this->assertStringNotContainsString('Sensitive Customer Name', json_encode($audit->metadata));
+        $this->assertStringNotContainsString('Private Customer', json_encode($audit->metadata));
     }
 
     public function test_work_date_filters_reject_invalid_and_reversed_ranges(): void
