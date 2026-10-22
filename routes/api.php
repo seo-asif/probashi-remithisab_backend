@@ -32,6 +32,7 @@ use App\Http\Controllers\Api\V1\Sender\RecipientController;
 use App\Http\Controllers\Api\V1\Sender\RemittanceController as SenderRemittanceController;
 use App\Http\Controllers\Api\V1\Support\VerificationCodeController;
 use App\Http\Controllers\Api\V1\Support\VerifyCodeController;
+use App\Http\Controllers\Api\V1\Student\StudentController;
 use App\Http\Controllers\Api\V1\Work\WorkController;
 use Illuminate\Support\Facades\Route;
 
@@ -151,6 +152,40 @@ Route::prefix('v1')->group(function () {
             Route::post('/savings-goals', 'store');
             Route::patch('/savings-goals/{id}', 'update');
             Route::delete('/savings-goals/{id}', 'destroy');
+        });
+
+        // ---- Student money management: private to each logged-in owner
+        Route::controller(StudentController::class)->prefix('student')->group(function () {
+            Route::get('/settings', 'settings');
+            Route::put('/settings', 'saveSettings');
+            Route::get('/opening-balances', 'openings');
+            Route::put('/opening-balances', 'saveOpening');
+            Route::delete('/opening-balances/{currency}', 'deleteOpening');
+
+            Route::get('/money-in', 'moneyIn');
+            Route::post('/money-in', 'storeMoneyIn');
+            Route::get('/money-in/{id}', 'showMoneyIn');
+            Route::patch('/money-in/{id}', 'updateMoneyIn');
+            Route::delete('/money-in/{id}', 'deleteMoneyIn');
+            Route::post('/money-in/{id}/restore', 'restoreMoneyIn');
+
+            Route::get('/expenses', 'expenses');
+            Route::post('/expenses', 'storeExpense');
+            Route::get('/expenses/{id}', 'showExpense');
+            Route::patch('/expenses/{id}', 'updateExpense');
+            Route::delete('/expenses/{id}', 'deleteExpense');
+            Route::post('/expenses/{id}/restore', 'restoreExpense');
+
+            Route::get('/fees', 'fees');
+            Route::post('/fees', 'storeFee');
+            Route::get('/fees/{id}', 'showFee');
+            Route::patch('/fees/{id}', 'updateFee');
+            Route::post('/fees/{id}/pay', 'payFee');
+            Route::post('/fees/{id}/unpay', 'unpayFee');
+            Route::delete('/fees/{id}', 'deleteFee');
+            Route::post('/fees/{id}/restore', 'restoreFee');
+
+            Route::get('/summary', 'summary');
         });
 
         // ---- worker tools (PRIVATE)
