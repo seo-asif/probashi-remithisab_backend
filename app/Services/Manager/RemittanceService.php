@@ -31,6 +31,15 @@ final class RemittanceService
     /** @return array{0: ManagerRemittance, 1: bool} */
     public function create(array $input): array
     {
+        return RecordId::withinCreationLock(
+            ManagerRemittance::class,
+            $input['id'] ?? null,
+            fn (): array => $this->createUnserialized($input),
+        );
+    }
+
+    private function createUnserialized(array $input): array
+    {
         if ($existing = RecordId::existing(ManagerRemittance::class, $input['id'] ?? null)) {
             return [$existing, false];
         }

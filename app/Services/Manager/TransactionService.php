@@ -49,6 +49,15 @@ final class TransactionService
     /** @return array{0: ManagerTransaction, 1: bool} */
     public function create(array $input): array
     {
+        return RecordId::withinCreationLock(
+            ManagerTransaction::class,
+            $input['id'] ?? null,
+            fn (): array => $this->createUnserialized($input),
+        );
+    }
+
+    private function createUnserialized(array $input): array
+    {
         if ($existing = RecordId::existing(ManagerTransaction::class, $input['id'] ?? null)) {
             return [$existing, false];
         }
@@ -224,7 +233,21 @@ final class TransactionService
     /** "+ টাকা পাঠালাম": one payment entry. @return array{0: BdtPayment, 1: bool} */
     public function addPayment(ManagerTransaction $tx, array $input): array
     {
+        return RecordId::withinCreationLock(
+            BdtPayment::class,
+            $input['id'] ?? null,
+            fn (): array => $this->addPaymentUnserialized($tx, $input),
+            fn (BdtPayment $existing): bool => (int) $existing->transaction_id === (int) $tx->id,
+        );
+    }
+
+    private function addPaymentUnserialized(ManagerTransaction $tx, array $input): array
+    {
         if ($existing = RecordId::existing(BdtPayment::class, $input['id'] ?? null)) {
+            if ((int) $existing->transaction_id !== (int) $tx->id) {
+                Reject::fail(['id' => ['id_taken', 'This payment id belongs to another transaction.']]);
+            }
+
             return [$existing, false];
         }
 

@@ -37,6 +37,15 @@ final class SenderService
     /** @return array{0: SenderRecipient, 1: bool} */
     public function createRecipient(array $data): array
     {
+        return RecordId::withinCreationLock(
+            SenderRecipient::class,
+            $data['id'] ?? null,
+            fn (): array => $this->createRecipientUnserialized($data),
+        );
+    }
+
+    private function createRecipientUnserialized(array $data): array
+    {
         if ($existing = RecordId::existing(SenderRecipient::class, $data['id'] ?? null)) {
             return [$existing, false];
         }
@@ -119,6 +128,15 @@ final class SenderService
 
     /** @return array{0: SenderRemittance, 1: bool} */
     public function createRemittance(array $input): array
+    {
+        return RecordId::withinCreationLock(
+            SenderRemittance::class,
+            $input['id'] ?? null,
+            fn (): array => $this->createRemittanceUnserialized($input),
+        );
+    }
+
+    private function createRemittanceUnserialized(array $input): array
     {
         if ($existing = RecordId::existing(SenderRemittance::class, $input['id'] ?? null)) {
             return [$existing, false];
@@ -352,6 +370,19 @@ final class SenderService
 
     /** @return array{0: SavingsGoal, 1: bool} */
     public function saveGoal(?SavingsGoal $goal, array $input): array
+    {
+        if ($goal !== null) {
+            return $this->saveGoalUnserialized($goal, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            SavingsGoal::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveGoalUnserialized(null, $input),
+        );
+    }
+
+    private function saveGoalUnserialized(?SavingsGoal $goal, array $input): array
     {
         if (!$goal && ($existing = RecordId::existing(SavingsGoal::class, $input['id'] ?? null))) {
             return [$existing, false];

@@ -98,6 +98,19 @@ final class StudentService
     /** @return array{0: StudentMoneyIn, 1: bool} */
     public function saveMoneyIn(?StudentMoneyIn $receipt, array $input): array
     {
+        if ($receipt !== null) {
+            return $this->saveMoneyInUnserialized($receipt, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            StudentMoneyIn::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveMoneyInUnserialized(null, $input),
+        );
+    }
+
+    private function saveMoneyInUnserialized(?StudentMoneyIn $receipt, array $input): array
+    {
         if ($receipt === null && ($existing = RecordId::existing(StudentMoneyIn::class, $input['id'] ?? null))) {
             return [$existing, false];
         }
@@ -108,6 +121,19 @@ final class StudentService
 
     /** @return array{0: StudentExpense, 1: bool} */
     public function saveExpense(?StudentExpense $expense, array $input): array
+    {
+        if ($expense !== null) {
+            return $this->saveExpenseUnserialized($expense, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            StudentExpense::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveExpenseUnserialized(null, $input),
+        );
+    }
+
+    private function saveExpenseUnserialized(?StudentExpense $expense, array $input): array
     {
         if ($expense !== null && $expense->student_fee_id !== null) {
             throw new ApiException('STUDENT_FEE_LINKED', 'Manage this expense from its fee.', 409);
@@ -123,6 +149,19 @@ final class StudentService
 
     /** @return array{0: StudentFee, 1: bool} */
     public function saveFee(?StudentFee $fee, array $input): array
+    {
+        if ($fee !== null) {
+            return $this->saveFeeUnserialized($fee, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            StudentFee::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveFeeUnserialized(null, $input),
+        );
+    }
+
+    private function saveFeeUnserialized(?StudentFee $fee, array $input): array
     {
         if ($fee === null && ($existing = RecordId::existing(StudentFee::class, $input['id'] ?? null))) {
             return [$existing, false];

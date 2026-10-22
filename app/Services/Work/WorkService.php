@@ -131,6 +131,19 @@ final class WorkService
     /** @return array{0: WorkBonus, 1: bool} */
     public function saveBonus(?WorkBonus $bonus, array $input): array
     {
+        if ($bonus !== null) {
+            return $this->saveBonusUnserialized($bonus, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            WorkBonus::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveBonusUnserialized(null, $input),
+        );
+    }
+
+    private function saveBonusUnserialized(?WorkBonus $bonus, array $input): array
+    {
         if (!$bonus && ($existing = RecordId::existing(WorkBonus::class, $input['id'] ?? null))) {
             return [$existing, false];
         }
@@ -204,6 +217,19 @@ final class WorkService
 
     /** @return array{0: Salary, 1: bool} */
     public function saveSalary(?Salary $salary, array $input): array
+    {
+        if ($salary !== null) {
+            return $this->saveSalaryUnserialized($salary, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            Salary::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveSalaryUnserialized(null, $input),
+        );
+    }
+
+    private function saveSalaryUnserialized(?Salary $salary, array $input): array
     {
         if (!$salary && ($existing = RecordId::existing(Salary::class, $input['id'] ?? null))) {
             return [$existing, false];
@@ -330,6 +356,19 @@ final class WorkService
     /** take or repay. A cut is made only through a salary. @return array{0: LoanEntry, 1: bool} */
     public function saveLoan(?LoanEntry $entry, array $input): array
     {
+        if ($entry !== null) {
+            return $this->saveLoanUnserialized($entry, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            LoanEntry::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveLoanUnserialized(null, $input),
+        );
+    }
+
+    private function saveLoanUnserialized(?LoanEntry $entry, array $input): array
+    {
         if (!$entry && ($existing = RecordId::existing(LoanEntry::class, $input['id'] ?? null))) {
             return [$existing, false];
         }
@@ -392,6 +431,19 @@ final class WorkService
 
     /** @return array{0: SpendingEntry, 1: bool} */
     public function saveSpending(?SpendingEntry $entry, array $input): array
+    {
+        if ($entry !== null) {
+            return $this->saveSpendingUnserialized($entry, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            SpendingEntry::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveSpendingUnserialized(null, $input),
+        );
+    }
+
+    private function saveSpendingUnserialized(?SpendingEntry $entry, array $input): array
     {
         if (!$entry && ($existing = RecordId::existing(SpendingEntry::class, $input['id'] ?? null))) {
             return [$existing, false];
