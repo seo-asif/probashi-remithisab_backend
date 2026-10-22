@@ -243,6 +243,11 @@ final class TransactionService
 
     private function addPaymentUnserialized(ManagerTransaction $tx, array $input): array
     {
+        // The controller may have loaded this transaction before another payment
+        // committed. Re-read its current balance while holding the creation lock.
+        $tx = ManagerTransaction::query()->whereKey($tx->getKey())
+            ->lockForUpdate()->firstOrFail();
+
         if ($existing = RecordId::existing(BdtPayment::class, $input['id'] ?? null)) {
             if ((int) $existing->transaction_id !== (int) $tx->id) {
                 Reject::fail(['id' => ['id_taken', 'This payment id belongs to another transaction.']]);
