@@ -13,6 +13,7 @@ class UserResource extends JsonResource
         return [
             'id'             => $this->id,
             'name'           => $this->name,
+            'member_no'      => $this->member_no === null ? null : (int) $this->member_no,
             'email'          => $this->email,
             'email_verified' => $this->email_verified_at !== null,
             'status'         => $this->status->value,

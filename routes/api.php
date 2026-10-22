@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\V1\Plan\ReferralController;
 use App\Http\Controllers\Api\V1\Plan\TrialController;
 use App\Http\Controllers\Api\V1\Platform\PaymentProviderSettingController as PlatformPaymentProviderSettingController;
 use App\Http\Controllers\Api\V1\Platform\PlanPaymentController as PlatformPlanPaymentController;
+use App\Http\Controllers\Api\V1\Platform\SupportVerificationController as PlatformSupportVerificationController;
 use App\Http\Controllers\Api\V1\Reports\ReportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
 use App\Http\Controllers\Api\V1\Sender\RecipientController;
@@ -202,6 +203,9 @@ Route::prefix('v1')->group(function () {
         'platform.admin',
         'throttle:api',
     ])->prefix('platform')->group(function () {
+
+        Route::post('/support/verify', PlatformSupportVerificationController::class)
+            ->middleware('throttle:support-code-admin-verify');
 
         Route::controller(PlatformPlanPaymentController::class)
             ->prefix('plan-payments')

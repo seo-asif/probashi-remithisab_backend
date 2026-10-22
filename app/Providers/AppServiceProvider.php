@@ -67,5 +67,13 @@ RateLimiter::for('support-code-verify', fn (Request $request) => [
         'support-verify-ip:' . $request->ip()
     ),
 ]);
+
+        // Platform admins verify user-displayed codes in a separate, rate-limited flow.
+        RateLimiter::for('support-code-admin-verify', fn (Request $request) => [
+            Limit::perMinutes(10, 10)->by(
+                'platform-support-admin:' . ($request->user()?->id ?: $request->ip())
+            ),
+            Limit::perMinute(30)->by('platform-support-ip:' . $request->ip()),
+        ]);
     }
 }
