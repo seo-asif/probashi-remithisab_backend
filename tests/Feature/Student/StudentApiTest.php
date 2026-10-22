@@ -3,6 +3,9 @@
 namespace Tests\Feature\Student;
 
 use App\Enums\BusinessRole;
+use App\Models\Business;
+use App\Models\User;
+use App\Support\Tenancy\CurrentBusiness;
 use App\Models\StudentExpense;
 use App\Models\StudentFee;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -73,7 +76,8 @@ final class StudentApiTest extends TestCase
 
     public function test_fee_is_counted_only_when_paid_and_never_twice(): void
     {
-        $this->actAs($this->makeBusiness());
+        $business = $this->makeBusiness();
+        $user = $this->actAs($business);
 
         $fee = $this->postJson('/api/v1/student/fees', [
             'name' => 'Tuition', 'amount' => '300',
@@ -89,7 +93,7 @@ final class StudentApiTest extends TestCase
         $this->postJson("/api/v1/student/fees/{$fee['id']}/pay", [])
             ->assertOk();
 
-        $this->assertSame(1, StudentExpense::query()->count());
+        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
         $summary = $this->getJson('/api/v1/student/summary')->assertOk()->json('data');
         $spent = collect($summary['by_currency'])->firstWhere('currency', 'FJD');
         $this->assertSame('300.00', $spent['period_spent']);
@@ -97,24 +101,25 @@ final class StudentApiTest extends TestCase
 
         $this->postJson("/api/v1/student/fees/{$fee['id']}/unpay")
             ->assertOk()->assertJsonPath('data.paid', false);
-        $this->assertSame(0, StudentExpense::query()->count());
+        $this->assertSame(0, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
 
         $this->postJson("/api/v1/student/fees/{$fee['id']}/pay", [])
             ->assertOk();
-        $this->assertSame(1, StudentExpense::query()->count());
-        $this->assertSame(1, StudentExpense::query()->withTrashed()->count());
+        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
+        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::withTrashed()->count()));
     }
 
     public function test_manual_expense_cannot_modify_fee_linked_expense(): void
     {
-        $this->actAs($this->makeBusiness());
+        $business = $this->makeBusiness();
+        $user = $this->actAs($business);
         $fee = $this->postJson('/api/v1/student/fees', [
             'name' => 'Registration', 'amount' => '75',
             'currency' => 'FJD', 'due_on' => now()->format('Y-m-d'),
         ])->assertCreated()->json('data');
 
         $this->postJson("/api/v1/student/fees/{$fee['id']}/pay")->assertOk();
-        $expense = StudentExpense::query()->firstOrFail();
+        $expense = $this->inStudentContext($business, $user, fn () => StudentExpense::query()->firstOrFail());
         $this->patchJson("/api/v1/student/expenses/{$expense->uuid}", [
             'amount' => '1',
         ])->assertStatus(409)->assertJsonPath('code', 'STUDENT_FEE_LINKED');
@@ -173,7 +178,8 @@ final class StudentApiTest extends TestCase
 
     public function test_delete_and_restore_fee_preserves_one_linked_expense(): void
     {
-        $this->actAs($this->makeBusiness());
+        $business = $this->makeBusiness();
+        $user = $this->actAs($business);
 
         $fee = $this->postJson('/api/v1/student/fees', [
             'name' => 'Tuition',
@@ -186,12 +192,21 @@ final class StudentApiTest extends TestCase
         $this->deleteJson("/api/v1/student/fees/{$fee['id']}")
             ->assertOk();
         $this->assertDatabaseCount('student_expenses', 1);
-        $this->assertSame(0, StudentExpense::query()->count());
+        $this->assertSame(0, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
 
         $this->postJson("/api/v1/student/fees/{$fee['id']}/restore")
             ->assertOk()->assertJsonPath('data.paid', true);
 
-        $this->assertSame(1, StudentExpense::query()->count());
-        $this->assertSame(1, StudentFee::query()->count());
+        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
+        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentFee::query()->count()));
+    }
+
+    /**
+     * Assertions must set the same owner context as the API middleware.
+     * Without an active owner, tenant and owner scopes fail closed.
+     */
+    private function inStudentContext(Business $business, User $user, callable $callback): mixed
+    {
+        return app(CurrentBusiness::class)->runAsUser($business, $user->id, $callback);
     }
 }
