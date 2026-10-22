@@ -2,6 +2,7 @@
 
 namespace App\Support\Reports;
 
+use App\Models\BdtPayment;
 use App\Models\ManagerRemittance;
 use App\Models\ManagerTransaction;
 use App\Support\Manager\ManagerOptions as O;
@@ -62,8 +63,6 @@ final class ManagerReport
     {
         $month = ReportPeriod::fromQuery(['period' => 'this_month'], $this->clock, $now);
         $tiles = ['received' => [], 'pending' => [], 'commission' => []];
-        $sent  = '0.00';
-
         $q = ManagerTransaction::query()->select(['id', 'currency', 'amount', 'commission', 'status', 'paid_bdt', 'occurred_at']);
         $month->apply($q, 'occurred_at');
         foreach ($q->lazyById(1000) as $t) {
@@ -72,10 +71,21 @@ final class ManagerReport
             if ($key === 'received') {
                 $tiles['commission'][$t->currency] = bcadd($tiles['commission'][$t->currency] ?? '0.00', (string) $t->commission, 2);
             }
-            $sent = bcadd($sent, (string) $t->paid_bdt, 2);
         }
 
         $owed = ManagerTransaction::query()->where('status', '<>', O::STATUS_PENDING)->selectRaw('COALESCE(SUM(obligation_bdt - paid_bdt), 0) AS owed')->value('owed');
+
+        // "Sent this month" is payment cash flow, not the sum of payments on
+        // transactions created this month. paid_on is a business-local date.
+        // Reversals are negative and removed payments are soft-deleted.
+        $sent = '0.00';
+        foreach (BdtPayment::query()
+            ->whereBetween('paid_on', [$month->fromDate, $month->toDate])
+            ->select(['id', 'amount_bdt'])
+            ->lazyById(1000) as $payment
+        ) {
+            $sent = bcadd($sent, (string) $payment->amount_bdt, 2);
+        }
 
         $list = fn (array $m) => array_map(fn ($c, $v) => ['currency' => $c, 'amount' => $v], array_keys($m), array_values($m));
         foreach ($tiles as &$m) {

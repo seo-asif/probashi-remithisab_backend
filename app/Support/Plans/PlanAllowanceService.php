@@ -105,6 +105,9 @@ final class PlanAllowanceService
             ),
 
             'entitlements' => [
+                // Existing monthly_pdf remains the enhanced paid export.
+                // Basic PDFs are available on Free as agreed, too.
+                'basic_pdf' => true,
                 'monthly_pdf' => $unlimited,
             ],
 
