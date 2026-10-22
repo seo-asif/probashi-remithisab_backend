@@ -180,17 +180,6 @@ final class SenderService
             return $r->refresh();
         }
 
-        if (EditPolicy::isCounted('sender_remittance')) {
-            $business = $this->current->get();
-
-            if ($business === null) {
-                throw new \LogicException(
-                    'Sender remittance edit requires a current business.'
-                );
-            }
-
-            $this->quota->consumeEdit($business);
-        }
 
         $r->save();
 

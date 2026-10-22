@@ -113,49 +113,6 @@ final class PlanQuotaService
     }
 
     /**
-     * Consume one shared monthly edit.
-     *
-     * Sender and Manager use this same business-scoped counter.
-     */
-    public function consumeEdit(
-        Business $business,
-        ?DateTimeInterface $at = null,
-    ): BusinessMonthlyUsage {
-        $this->requireTransaction();
-
-        $business = $this->lockBusiness($business);
-        $at = $this->instant($at);
-        $periodStart = $this->periodStart($business, $at);
-
-        $usage = $this->lockBusinessUsage(
-            $business->id,
-            $periodStart,
-        );
-
-        $tier = $this->effectiveTier($business, $at);
-        $limit = PlanLimits::FREE_EDITS;
-
-        if (
-            $tier !== PlanLimits::UNLIMITED
-            && $usage->edits_used >= $limit
-        ) {
-            $this->limitReached(
-                'PLAN_EDIT_LIMIT',
-                'Your monthly edit limit has been reached.',
-                $limit,
-                $usage->edits_used,
-                $tier,
-                $business,
-                $at,
-            );
-        }
-
-        $usage->increment('edits_used');
-
-        return $usage->refresh();
-    }
-
-    /**
      * Calendar-month key stored in the database.
      *
      * The instant is converted to the BUSINESS timezone first.

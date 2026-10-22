@@ -169,37 +169,6 @@ public function test_quota_consumption_rolls_back_with_the_transaction(): void
         }
     }
 
-    public function test_edit_quota_is_shared_at_business_level(): void
-    {
-        BusinessMonthlyUsage::create([
-            'business_id' => $this->business->id,
-            'period_start' => '2026-10-01',
-            'edits_used' => 19,
-        ]);
-
-        DB::transaction(function () {
-            $usage = $this->quota->consumeEdit(
-                $this->business,
-                $this->at(),
-            );
-
-            $this->assertSame(20, $usage->edits_used);
-        });
-
-        try {
-            DB::transaction(function () {
-                $this->quota->consumeEdit(
-                    $this->business,
-                    $this->at(),
-                );
-            });
-
-            $this->fail('Expected edit quota exception.');
-        } catch (ApiException $e) {
-            $this->assertSame('PLAN_EDIT_LIMIT', $e->errorCode);
-        }
-    }
-
     public function test_unlimited_does_not_block_but_still_records_usage(): void
     {
         BusinessSubscription::create([

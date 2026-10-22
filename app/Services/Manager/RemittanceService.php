@@ -8,7 +8,6 @@ use App\Support\Manager\ManagerOptions as O;
 use App\Support\Money\Dec;
 use App\Support\Money\FinancialNumber;
 use App\Support\Money\MoneyField;
-use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
 use App\Support\Records\RecordTime;
@@ -26,7 +25,6 @@ final class RemittanceService
 {
    public function __construct(
     private CurrentBusiness $current,
-    private PlanQuotaService $quota,
 ) {
 }
 
@@ -70,17 +68,6 @@ final class RemittanceService
             return $r->refresh();
         }
 
-        if (EditPolicy::isCounted('operator_remittance')) {
-            $business = $this->current->get();
-
-            if ($business === null) {
-                throw new \LogicException(
-                    'Manager remittance edit requires a current business.'
-                );
-            }
-
-            $this->quota->consumeEdit($business);
-        }
 
         $r->save();
 

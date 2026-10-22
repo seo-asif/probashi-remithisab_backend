@@ -7,16 +7,6 @@ use PHPUnit\Framework\TestCase;
 
 class EditPolicyTest extends TestCase
 {
-    public function test_only_transactions_and_remittances_use_the_edit_allowance(): void
-    {
-        foreach (['operator_transaction', 'operator_remittance', 'sender_remittance'] as $type) {
-            $this->assertTrue(EditPolicy::isCounted($type), $type);
-        }
-        foreach (['customer', 'family_member', 'payment_account', 'settings', 'anything_else'] as $type) {
-            $this->assertFalse(EditPolicy::isCounted($type), $type);
-        }
-    }
-
     public function test_saving_without_changes_is_not_an_edit(): void
     {
         $stored = ['amount' => '100.00', 'rate' => '72.5000', 'notes' => null, 'charge' => '2.00'];

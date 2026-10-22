@@ -74,10 +74,6 @@ final class PlanAllowanceService
             $businessUsage?->manager_transaction_bonus ?? 0
         );
 
-        $editsUsed = (int) (
-            $businessUsage?->edits_used ?? 0
-        );
-
         $familyUsed = SenderRecipient::withoutGlobalScopes()
             ->where('business_id', $business->id)
             ->where('owner_user_id', $userId)
@@ -145,15 +141,6 @@ final class PlanAllowanceService
                     used: $customersUsed,
                 ),
 
-                'edits' => $this->monthlyAllowance(
-                    scope: 'business',
-                    limit: $unlimited
-                        ? null
-                        : PlanLimits::FREE_EDITS,
-                    used: $editsUsed,
-                    bonus: 0,
-                    resetsOn: $resetsOn,
-                ),
             ],
         ];
     }

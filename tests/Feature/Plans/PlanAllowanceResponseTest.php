@@ -70,10 +70,7 @@ class PlanAllowanceResponseTest extends TestCase
                 'data.plan.allowances.customers.limit',
                 10,
             )
-            ->assertJsonPath(
-                'data.plan.allowances.edits.limit',
-                20,
-            );
+            ->assertJsonMissingPath('data.plan.allowances.edits');
 
         // Reading /me must never create quota/subscription state.
         $this->assertDatabaseCount('business_subscriptions', 0);
@@ -81,7 +78,7 @@ class PlanAllowanceResponseTest extends TestCase
         $this->assertDatabaseCount('user_monthly_usage', 0);
     }
 
-    public function test_monthly_usage_is_private_for_sender_but_shared_for_manager_and_edits(): void
+    public function test_monthly_usage_is_private_for_sender_but_shared_for_manager(): void
     {
         $business = $this->makeBusiness([
             'timezone' => 'Pacific/Fiji',
@@ -151,17 +148,11 @@ class PlanAllowanceResponseTest extends TestCase
                 'data.plan.allowances.manager_transactions.remaining',
                 32,
             )
-            ->assertJsonPath(
-                'data.plan.allowances.edits.used',
-                4,
-            )
-            ->assertJsonPath(
-                'data.plan.allowances.edits.remaining',
-                16,
-            );
+            ->assertJsonMissingPath('data.plan.allowances.edits')
+            ->assertJsonMissingPath('data.plan.allowances.edits');
 
         // Same business, different user:
-        // Sender usage changes, Manager/edit usage does not.
+        // Sender usage changes, Manager usage does not.
         $this->login($second);
 
         $this->getJson('/api/v1/me')
@@ -186,10 +177,7 @@ class PlanAllowanceResponseTest extends TestCase
                 'data.plan.allowances.manager_transactions.used',
                 8,
             )
-            ->assertJsonPath(
-                'data.plan.allowances.edits.used',
-                4,
-            );
+            ->assertJsonMissingPath('data.plan.allowances.edits');
     }
 
     public function test_active_family_count_is_per_user_and_customer_count_is_per_business(): void
@@ -352,17 +340,13 @@ class PlanAllowanceResponseTest extends TestCase
                 'data.plan.allowances.manager_transactions.used',
                 31,
             )
-            ->assertJsonPath(
-                'data.plan.allowances.edits.used',
-                27,
-            );
+            ->assertJsonMissingPath('data.plan.allowances.edits');
 
         foreach ([
             'sender_remittances',
             'family_members',
             'manager_transactions',
             'customers',
-            'edits',
         ] as $allowance) {
             $this->assertNull(
                 $response->json(
@@ -425,10 +409,7 @@ class PlanAllowanceResponseTest extends TestCase
                 'data.plan.allowances.manager_transactions.limit',
                 20,
             )
-            ->assertJsonPath(
-                'data.plan.allowances.edits.limit',
-                20,
-            );
+            ->assertJsonMissingPath('data.plan.allowances.edits');
 
         // Expiry changes effective access, not historical metadata.
         $this->assertNotNull(
@@ -478,13 +459,6 @@ class PlanAllowanceResponseTest extends TestCase
             $expected,
             $response->json(
                 'data.plan.allowances.manager_transactions.resets_on'
-            ),
-        );
-
-        $this->assertSame(
-            $expected,
-            $response->json(
-                'data.plan.allowances.edits.resets_on'
             ),
         );
 

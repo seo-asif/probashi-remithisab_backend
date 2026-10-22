@@ -136,17 +136,6 @@ final class TransactionService
                 return $tx->refresh();
             }
 
-            if (EditPolicy::isCounted('operator_transaction')) {
-                $business = $this->current->get();
-
-                if ($business === null) {
-                    throw new \LogicException(
-                        'Manager transaction edit requires a current business.'
-                    );
-                }
-
-                $this->quota->consumeEdit($business);
-            }
 
             $tx->save();
 
