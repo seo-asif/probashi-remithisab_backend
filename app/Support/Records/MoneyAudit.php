@@ -30,6 +30,16 @@ final class MoneyAudit
         'phone',
         'phone_normalized',
         'phone_key',
+        // Do not duplicate personal names from private financial records
+        // in broad audit metadata. The record UUID remains available.
+        'name',
+        'from_name',
+        'recipient_name',
+        'customer_name',
+        'account_name',
+        'owner_name',
+        'beneficiary_name',
+        'holder_name',
         'address',
         'notes',
         'note',

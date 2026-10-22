@@ -295,10 +295,26 @@ class WorkController extends Controller
     {
         $from = $request->query('from');
         $to   = $request->query('to');
-        foreach (['from' => $from, 'to' => $to] as $f => $v) {
-            if (($v !== null || $required) && (!is_string($v) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $v))) {
-                Reject::fail([$f => ['date_invalid', 'Use a date like 2026-10-15.']]);
+        $zone = $this->current->get()->timezone;
+
+        foreach (['from' => $from, 'to' => $to] as $field => $value) {
+            if ($value === null) {
+                if ($required) {
+                    Reject::fail([$field => ['date_invalid', 'Choose a date like 2026-10-15.']]);
+                }
+
+                continue;
             }
+
+            // Validate the calendar date, not only the YYYY-MM-DD shape.
+            // Future filter bounds are valid for an empty report.
+            if ($error = \App\Support\Records\RecordTime::date($value, $zone, allowFuture: true)) {
+                Reject::fail([$field => $error]);
+            }
+        }
+
+        if ($from !== null && $to !== null && $from > $to) {
+            Reject::fail(['to' => ['date_order_invalid', 'The ending date cannot be earlier than the starting date.']]);
         }
 
         return [$from, $to];
