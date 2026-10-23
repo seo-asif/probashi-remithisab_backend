@@ -11,7 +11,7 @@ class LoanEntry extends Model
 {
     use BelongsToOwner, HasPublicUuid;
 
-    protected $fillable = ['uuid', 'type', 'amount', 'entry_date', 'salary_id', 'note'];
+    protected $fillable = ['uuid', 'type', 'amount', 'currency', 'entry_date', 'salary_id', 'note'];
 
     protected function casts(): array
     {

@@ -11,7 +11,7 @@ class WorkDay extends Model
 {
     use BelongsToOwner, HasPublicUuid;
 
-    protected $fillable = ['uuid', 'work_date', 'kind', 'hours', 'amount', 'note'];
+    protected $fillable = ['uuid', 'work_date', 'kind', 'hours', 'amount', 'currency', 'note'];
 
     protected function casts(): array
     {

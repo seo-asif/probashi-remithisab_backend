@@ -191,6 +191,7 @@ Route::prefix('v1')->group(function () {
         // ---- worker tools (PRIVATE)
         Route::controller(WorkController::class)->prefix('work')->group(function () {
             Route::get('/settings', 'settings');
+            Route::get('/rates', 'rates');
             Route::put('/settings', 'saveSettings');
             Route::get('/days', 'days');
             Route::put('/days/{date}', 'saveDay');

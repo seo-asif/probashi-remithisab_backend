@@ -10,7 +10,7 @@ class WorkBonus extends Model
 {
     use BelongsToOwner, HasPublicUuid;
 
-    protected $fillable = ['uuid', 'bonus_date', 'amount', 'note'];
+    protected $fillable = ['uuid', 'bonus_date', 'amount', 'currency', 'note'];
 
     protected function casts(): array
     {

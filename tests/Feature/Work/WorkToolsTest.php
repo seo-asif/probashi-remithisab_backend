@@ -101,7 +101,7 @@ class WorkToolsTest extends TestCase
 
     public function test_without_an_hourly_rate_only_the_loan_limits_the_cut(): void
     {
-        $this->putJson('/api/v1/work/settings', ['hourly_rate' => null])->assertOk()->assertJsonPath('data.has_rate', false);
+        $this->putJson('/api/v1/work/settings', ['hourly_rate' => null, 'effective_from' => '2026-09-30'])->assertOk()->assertJsonPath('data.has_rate', false);
         $this->putJson('/api/v1/work/days/2026-10-01', ['kind' => 'work', 'hours' => '8'])->assertOk()->assertJsonPath('data.day_pay', '0.00');
         $this->postJson('/api/v1/work/loans', ['type' => 'take', 'amount' => '500', 'entry_date' => '2026-09-20'])->assertCreated();
 

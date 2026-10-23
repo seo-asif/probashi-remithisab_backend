@@ -15,7 +15,7 @@ use App\Support\Money\Dec;
  *   loan_left  = sum(take) - sum(cut) - sum(repay)
  *   max_cut    = min(period_pay, loan_left)   (only loan_left when no hourly rate is set)
  *   in_hand    = max(0, period_pay - loan_cut)
- * Pay is counted with the CURRENT settings (like the app), so changing the rate updates unpaid periods.
+ * WorkService resolves each day's effective-dated rate; saved salary pay is a frozen snapshot.
  */
 final class WorkCalculator
 {

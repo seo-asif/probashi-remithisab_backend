@@ -8,6 +8,7 @@ use App\Models\SpendingEntry;
 use App\Models\WorkBonus;
 use App\Models\WorkDay;
 use App\Models\WorkSetting;
+use App\Models\WorkerRate;
 use App\Support\Money\Dec;
 use App\Support\Money\FinancialNumber;
 use App\Support\Money\MoneyField;
@@ -60,16 +61,71 @@ final class WorkService
             Reject::fail($errors);
         }
 
-        $old = $s->exists ? MoneyAudit::values($s) : [];
-        $s->fill(['hourly_rate' => ($rate === null || $rate === '') ? null : Dec::of($rate), 'day_hours' => Dec::of($hours), 'ot_multiplier' => Dec::of($ot), 'currency' => $currency])->save();
-        MoneyAudit::record($old ? 'updated' : 'created', $s, $old, MoneyAudit::values($s));
+        $effectiveFrom = $input['effective_from'] ?? null;
+        if (array_key_exists('effective_from', $input) && ($e = RecordTime::date($effectiveFrom, $this->tz()))) {
+            Reject::fail(['effective_from' => $e]);
+        }
+        $changedRate = ($rate === null || $rate === '') !== ($s->hourly_rate === null)
+            || ($rate !== null && $rate !== '' && Dec::of($rate) !== Dec::of($s->hourly_rate))
+            || ($currency !== null && $currency !== $s->currency);
+        return DB::transaction(function () use ($s, $rate, $hours, $ot, $currency, $effectiveFrom, $changedRate): WorkSetting {
+            $old = $s->exists ? MoneyAudit::values($s) : [];
+            $s->fill([
+                'hourly_rate' => ($rate === null || $rate === '') ? null : Dec::of($rate),
+                'day_hours' => Dec::of($hours), 'ot_multiplier' => Dec::of($ot), 'currency' => $currency,
+            ])->save();
 
-        return $s->refresh();
+            if ($changedRate) {
+                $hasHistory = WorkerRate::query()->exists();
+                $start = $hasHistory
+                    ? ($effectiveFrom ?? (new \DateTimeImmutable('now', new \DateTimeZone($this->tz())))->format('Y-m-d'))
+                    : null;
+                $history = WorkerRate::query()->where('effective_from', $start)->first()
+                    ?? new WorkerRate(['effective_from' => $start]);
+                $oldRate = $history->exists ? MoneyAudit::values($history) : [];
+                $history->fill([
+                    'hourly_rate' => ($rate === null || $rate === '') ? null : Dec::of($rate),
+                    'currency' => $currency ?? $this->currency(), 'effective_from' => $start,
+                ])->save();
+                MoneyAudit::record($oldRate ? 'updated' : 'created', $history, $oldRate, MoneyAudit::values($history));
+            }
+            MoneyAudit::record($old ? 'updated' : 'created', $s, $old, MoneyAudit::values($s));
+
+            return $s->refresh();
+        });
     }
 
     public function currency(): string
     {
         return $this->settings()?->currency ?? $this->current->get()->default_currency ?? 'FJD';
+    }
+
+    public function rateHistory(): array
+    {
+        return WorkerRate::query()->orderBy('effective_from')->orderBy('id')->get()
+            ->map(fn ($r) => ['hourly_rate' => $r->hourly_rate === null ? null : Dec::money($r->hourly_rate), 'currency' => $r->currency, 'effective_from' => $r->effective_from?->format('Y-m-d')])->all();
+    }
+
+    public function rateSettingsOn(string $date): ?WorkSetting
+    {
+        $base = $this->settings();
+        $rate = WorkerRate::query()
+            ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $date))
+            ->orderByDesc('effective_from')->orderByDesc('id')->first();
+        if (!$rate) {
+            return $base;
+        }
+
+        return new WorkSetting([
+            'hourly_rate' => $rate->hourly_rate, 'currency' => $rate->currency,
+            'day_hours' => $base?->day_hours ?? '8.00',
+            'ot_multiplier' => $base?->ot_multiplier ?? '1.50',
+        ]);
+    }
+
+    public function currencyOn(string $date): string
+    {
+        return $this->rateSettingsOn($date)?->currency ?? $this->currency();
     }
 
     // ------------------------------------------------------------------ days and bonuses
@@ -112,7 +168,7 @@ final class WorkService
             $day = WorkDay::query()->where('work_date', $date)->first();
             $old = $day ? MoneyAudit::values($day) : [];
             $day ??= new WorkDay(['uuid' => RecordId::make($input['id'] ?? null), 'work_date' => $date]);
-            $day->fill(['kind' => $kind, 'hours' => $hours, 'amount' => $amount, 'note' => $input['note'] ?? null])->save();
+            $day->fill(['kind' => $kind, 'hours' => $hours, 'amount' => $amount, 'currency' => $day->currency ?? $this->currencyOn($date), 'note' => $input['note'] ?? null])->save();
             MoneyAudit::record($old ? 'updated' : 'created', $day, $old, MoneyAudit::values($day));
 
             return $day->refresh();
@@ -164,7 +220,7 @@ final class WorkService
         $created = !$bonus;
         $bonus ??= new WorkBonus(['uuid' => RecordId::make($input['id'] ?? null)]);
         $old = $bonus->exists ? MoneyAudit::values($bonus) : [];
-        $bonus->fill(['bonus_date' => $date, 'amount' => Dec::of($amount), 'note' => $input['note'] ?? $bonus->note])->save();
+        $bonus->fill(['bonus_date' => $date, 'amount' => Dec::of($amount), 'currency' => $bonus->currency ?? $this->currencyOn($date), 'note' => $input['note'] ?? $bonus->note])->save();
         MoneyAudit::record($created ? 'created' : 'updated', $bonus, $old, MoneyAudit::values($bonus));
 
         return [$bonus->refresh(), $created];
@@ -172,26 +228,64 @@ final class WorkService
 
     // ------------------------------------------------------------------ pay of a period
 
-    /** @return array{days_worked: int, hours: string, overtime_h: string, work_pay: string, leave_pay: string, bonus: string, period_pay: string, has_rate: bool} */
+    /** Money is grouped by currency; mixed-currency totals are never added together. */
     public function periodPay(string $from, string $to): array
     {
-        $s   = $this->settings();
-        $out = ['days_worked' => 0, 'hours' => '0.00', 'overtime_h' => '0.00', 'work_pay' => '0.00', 'leave_pay' => '0.00', 'bonus' => '0.00'];
+        $daysWorked = 0;
+        $hours = '0.00';
+        $overtime = '0.00';
+        $hasRate = false;
+        $byCurrency = [];
 
-        foreach (WorkDay::query()->whereBetween('work_date', [$from, $to])->get() as $d) {
-            $calc = W::day($d->kind, $d->hours, $d->amount, $s);
-            if ($d->kind === 'work') {
-                $out['days_worked']++;
-                $out['hours']      = bcadd($out['hours'], Dec::of($d->hours), 2);
-                $out['overtime_h'] = bcadd($out['overtime_h'], $calc['overtime_h'], 2);
-                $out['work_pay']   = bcadd($out['work_pay'], $calc['day_pay'], 2);
-            } else {
-                $out['leave_pay'] = bcadd($out['leave_pay'], $calc['day_pay'], 2);
+        $add = static function (array &$totals, string $currency, string $field, string $value): void {
+            $totals[$currency] ??= ['work_pay' => '0.00', 'leave_pay' => '0.00', 'bonus' => '0.00'];
+            $totals[$currency][$field] = bcadd($totals[$currency][$field], $value, 2);
+        };
+
+        foreach (WorkDay::query()->whereBetween('work_date', [$from, $to])->orderBy('work_date')->get() as $day) {
+            $date = $day->work_date->format('Y-m-d');
+            $setting = $this->rateSettingsOn($date);
+            $calc = W::day($day->kind, $day->hours, $day->amount, $setting);
+            if ($day->kind === 'work') {
+                $daysWorked++;
+                $hours = bcadd($hours, Dec::of($day->hours), 2);
+                $overtime = bcadd($overtime, $calc['overtime_h'], 2);
+                $hasRate = $hasRate || W::hasRate($setting);
+                $add($byCurrency, $this->currencyOn($date), 'work_pay', $calc['day_pay']);
+            } elseif ($day->kind === 'holiday' || $day->kind === 'sick') {
+                $add($byCurrency, $day->currency ?? $this->currencyOn($date), 'leave_pay', $calc['day_pay']);
             }
         }
-        $out['bonus'] = Dec::of((string) WorkBonus::query()->whereBetween('bonus_date', [$from, $to])->sum('amount'));
 
-        return [...$out, 'period_pay' => bcadd(bcadd($out['work_pay'], $out['leave_pay'], 2), $out['bonus'], 2), 'has_rate' => W::hasRate($s)];
+        foreach (WorkBonus::query()->whereBetween('bonus_date', [$from, $to])->get() as $bonus) {
+            $add($byCurrency, $bonus->currency ?? $this->currencyOn($bonus->bonus_date->format('Y-m-d')), 'bonus', Dec::of($bonus->amount));
+        }
+
+        if (!$daysWorked) {
+            $hasRate = W::hasRate($this->rateSettingsOn($to));
+        }
+        ksort($byCurrency);
+        $groups = [];
+        foreach ($byCurrency as $currency => $values) {
+            $groups[] = [
+                'currency' => $currency, ...$values,
+                'period_pay' => bcadd(bcadd($values['work_pay'], $values['leave_pay'], 2), $values['bonus'], 2),
+            ];
+        }
+
+        // Preserve the existing single-currency API shape.
+        $single = count($groups) <= 1;
+        $one = $groups[0] ?? ['currency' => $this->currencyOn($to), 'work_pay' => '0.00', 'leave_pay' => '0.00', 'bonus' => '0.00', 'period_pay' => '0.00'];
+        return [
+            'days_worked' => $daysWorked, 'hours' => $hours, 'overtime_h' => $overtime,
+            'work_pay' => $single ? $one['work_pay'] : null,
+            'leave_pay' => $single ? $one['leave_pay'] : null,
+            'bonus' => $single ? $one['bonus'] : null,
+            'period_pay' => $single ? $one['period_pay'] : null,
+            'currency' => $single ? $one['currency'] : null,
+            'by_currency' => $groups,
+            'has_rate' => $hasRate,
+        ];
     }
 
     // ------------------------------------------------------------------ salaries
@@ -203,15 +297,17 @@ final class WorkService
         $from   = $unpaid[0] ?? null;
         $to     = $unpaid ? end($unpaid) : null;
         $pay    = $from ? $this->periodPay($from, $to) : null;
-        $left   = $this->loanLeft();
+        $left   = $pay && $pay['currency'] !== null ? $this->loanLeft(null, $pay['currency']) : '0.00';
 
         return [
             'from_date'  => $from,
             'to_date'    => $to,
             'unpaid_days'=> count($unpaid),
-            'period_pay' => $pay['period_pay'] ?? '0.00',
+            'period_pay' => $pay['period_pay'] ?? null,
+            'currency' => $pay['currency'] ?? $this->currency(),
+            'by_currency' => $pay['by_currency'] ?? [],
             'loan_left'  => $left,
-            'max_cut'    => W::maxCut($pay['period_pay'] ?? '0.00', $left, W::hasRate($this->settings())),
+            'max_cut'    => $pay && $pay['currency'] === null ? '0.00' : W::maxCut($pay['period_pay'] ?? '0.00', $left, $pay['has_rate'] ?? W::hasRate($this->settings())),
         ];
     }
 
@@ -238,6 +334,9 @@ final class WorkService
         $from = $input['from_date'] ?? $salary?->from_date?->format('Y-m-d');
         $to   = $input['to_date'] ?? $salary?->to_date?->format('Y-m-d');
         $errors = [];
+        if ($salary && ($from !== $salary->from_date->format('Y-m-d') || $to !== $salary->to_date->format('Y-m-d'))) {
+            $errors['from_date'] = ['salary_dates_locked', 'A saved salary period cannot be changed because its pay is frozen.'];
+        }
 
         foreach (['from_date' => $from, 'to_date' => $to] as $f => $v) {
             if ($e = RecordTime::date($v, $this->tz())) {
@@ -274,9 +373,17 @@ final class WorkService
         if (!$errors && ($e = MoneyField::check($cut, 'loan_cut', 'the loan cut', '10000000', required: false, positive: false))) {
             $errors['loan_cut'] = $e;
         }
-        $pay = !$errors ? $this->periodPay($from, $to) : null;
+        $pay = !$errors ? ($salary && $salary->period_pay !== null
+            ? ['period_pay' => Dec::of($salary->period_pay), 'currency' => $salary->currency, 'has_rate' => (bool) $salary->rate_configured]
+            : $this->periodPay($from, $to)) : null;
+        if (!$errors && $pay['currency'] === null) {
+            $errors['from_date'] = ['salary_mixed_currency', 'Save salaries separately for each currency.'];
+        }
+        if (!$errors && isset($input['currency']) && $input['currency'] !== $pay['currency']) {
+            $errors['currency'] = ['salary_currency_mismatch', 'Salary currency must match the work pay currency.'];
+        }
         if (!$errors && bccomp(Dec::of($cut), '0', 2) > 0) {
-            $left = $this->loanLeft($salary?->id);
+            $left = $this->loanLeft($salary?->id, $pay['currency']);
             $max  = W::maxCut($pay['period_pay'], $left, $pay['has_rate']);
             if (bccomp(Dec::of($cut), $max, 2) > 0) {
                 $errors['loan_cut'] = $pay['has_rate'] && bccomp($pay['period_pay'], $left, 2) < 0
@@ -288,20 +395,23 @@ final class WorkService
             Reject::fail($errors);
         }
 
-        return DB::transaction(function () use ($salary, $input, $from, $to, $amount, $receivedOn, $cut) {
+        return DB::transaction(function () use ($salary, $input, $from, $to, $amount, $receivedOn, $cut, $pay) {
             $created = !$salary;
             $salary ??= new Salary(['uuid' => RecordId::make($input['id'] ?? null)]);
             $old = $salary->exists ? MoneyAudit::values($salary) : [];
             $salary->fill([
                 'from_date' => $from, 'to_date' => $to,
                 'amount_received' => ($amount === null || $amount === '') ? null : Dec::of($amount),
+                'currency' => $salary->currency ?? $pay['currency'],
+                'period_pay' => $salary->period_pay ?? $pay['period_pay'],
+                'rate_configured' => $salary->rate_configured ?? $pay['has_rate'],
                 'received_on' => $receivedOn ?: null,
                 'note' => $input['note'] ?? $salary->note,
             ])->save();
 
             LoanEntry::query()->where('salary_id', $salary->id)->where('type', 'cut')->delete();
             if (bccomp(Dec::of($cut), '0', 2) > 0) {
-                LoanEntry::create(['uuid' => RecordId::make(null), 'type' => 'cut', 'amount' => Dec::of($cut), 'entry_date' => $receivedOn ?: $to, 'salary_id' => $salary->id]);
+                LoanEntry::create(['uuid' => RecordId::make(null), 'type' => 'cut', 'amount' => Dec::of($cut), 'entry_date' => $receivedOn ?: $to, 'salary_id' => $salary->id, 'currency' => $pay['currency']]);
             }
             MoneyAudit::record($created ? 'created' : 'updated', $salary, $old, [...MoneyAudit::values($salary), 'loan_cut' => Dec::of($cut)]);
 
@@ -320,10 +430,10 @@ final class WorkService
     /** Salary with its pay, cut and money in hand. */
     public function salarySummary(Salary $s): array
     {
-        $pay = $this->periodPay($s->from_date->format('Y-m-d'), $s->to_date->format('Y-m-d'));
+        $pay = $s->period_pay !== null ? Dec::of($s->period_pay) : $this->periodPay($s->from_date->format('Y-m-d'), $s->to_date->format('Y-m-d'))['period_pay'];
         $cut = Dec::of($s->loanCut?->amount);
 
-        return ['period_pay' => $pay['period_pay'], 'loan_cut' => $cut, 'in_hand' => W::inHand($pay['period_pay'], $cut), 'has_rate' => $pay['has_rate']];
+        return ['period_pay' => $pay, 'loan_cut' => $cut, 'in_hand' => $pay === null ? null : W::inHand($pay, $cut), 'has_rate' => (bool) $s->rate_configured];
     }
 
     /** @return list<string> dates of work, holiday and sick days not in the future and not inside any salary */
@@ -340,10 +450,11 @@ final class WorkService
 
     // ------------------------------------------------------------------ loans
 
-    public function loanLeft(?int $exceptSalaryId = null): string
+    public function loanLeft(?int $exceptSalaryId = null, ?string $currency = null): string
     {
         $left = '0.00';
-        foreach (LoanEntry::query()->get() as $e) {
+        $currency ??= $this->currency();
+        foreach (LoanEntry::query()->where('currency', $currency)->get() as $e) {
             if ($exceptSalaryId && (int) $e->salary_id === $exceptSalaryId) {
                 continue;
             }
@@ -351,6 +462,26 @@ final class WorkService
         }
 
         return $left;
+    }
+
+    /** Balances remain separate; never sum loan entries denominated in different currencies. */
+    public function loanBalances(): array
+    {
+        $totals = [];
+        foreach (LoanEntry::query()->orderBy('id')->get() as $entry) {
+            $currency = $entry->currency ?? $this->currency();
+            $totals[$currency] ??= '0.00';
+            $totals[$currency] = $entry->type === 'take'
+                ? bcadd($totals[$currency], Dec::of($entry->amount), 2)
+                : bcsub($totals[$currency], Dec::of($entry->amount), 2);
+        }
+        ksort($totals);
+
+        return array_map(
+            static fn ($currency, $amount) => ['currency' => $currency, 'loan_left' => $amount],
+            array_keys($totals),
+            array_values($totals),
+        );
     }
 
     /** take or repay. A cut is made only through a salary. @return array{0: LoanEntry, 1: bool} */
@@ -379,7 +510,14 @@ final class WorkService
         $type   = $input['type'] ?? $entry?->type;
         $amount = array_key_exists('amount', $input) ? $input['amount'] : $entry?->amount;
         $date   = $input['entry_date'] ?? $entry?->entry_date?->format('Y-m-d');
+        $currency = array_key_exists('currency', $input) ? $input['currency'] : ($entry?->currency ?? (is_string($date) ? $this->currencyOn($date) : $this->currency()));
         $errors = [];
+        if (!in_array($currency, SenderOptions::CURRENCIES, true)) {
+            $errors['currency'] = ['currency_invalid', 'Choose a supported currency.'];
+        }
+        if ($entry && $currency !== $entry->currency) {
+            $errors['currency'] = ['loan_currency_locked', 'The currency of a saved loan entry cannot change.'];
+        }
         if (!in_array($type, ['take', 'repay'], true)) {
             $errors['type'] = ['loan_type_invalid', 'Choose take (I borrowed) or repay (I paid back).'];
         }
@@ -391,7 +529,7 @@ final class WorkService
         }
         if (!$errors) {
             // the loan left can never go below 0
-            $left = $this->loanLeft();
+            $left = $this->loanLeft(null, $currency);
             if ($entry) {
                 $left = $entry->type === 'take' ? bcsub($left, Dec::of($entry->amount), 2) : bcadd($left, Dec::of($entry->amount), 2);
             }
@@ -407,7 +545,7 @@ final class WorkService
         $created = !$entry;
         $entry ??= new LoanEntry(['uuid' => RecordId::make($input['id'] ?? null)]);
         $old = $entry->exists ? MoneyAudit::values($entry) : [];
-        $entry->fill(['type' => $type, 'amount' => Dec::of($amount), 'entry_date' => $date, 'note' => $input['note'] ?? $entry->note])->save();
+        $entry->fill(['type' => $type, 'amount' => Dec::of($amount), 'currency' => $currency, 'entry_date' => $date, 'note' => $input['note'] ?? $entry->note])->save();
         MoneyAudit::record($created ? 'created' : 'updated', $entry, $old, MoneyAudit::values($entry));
 
         return [$entry->refresh(), $created];
@@ -418,7 +556,7 @@ final class WorkService
         if ($entry->type === 'cut') {
             Reject::fail(['type' => ['cut_through_salary', 'A loan cut is removed on its salary.']]);
         }
-        if ($entry->type === 'take' && bccomp(bcsub($this->loanLeft(), Dec::of($entry->amount), 2), '0', 2) < 0) {
+        if ($entry->type === 'take' && bccomp(bcsub($this->loanLeft(null, $entry->currency), Dec::of($entry->amount), 2), '0', 2) < 0) {
             Reject::fail(['amount' => ['loan_already_repaid', 'This loan is already (partly) paid back. Remove the repayments first.']]);
         }
         DB::transaction(function () use ($entry) {
