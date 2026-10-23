@@ -28,16 +28,35 @@ class RemittanceTest extends TestCase
         $this->assertSame('76613.63', $this->remittance(['rate' => '75.50', 'charge' => '10', 'charge_type' => 'included'])['remit_bdt']);
     }
 
-    public function test_other_keeps_only_a_typed_total_and_direct_cash_is_read_as_other(): void
+    public function test_legacy_other_is_readable_and_editable_but_new_other_is_rejected(): void
     {
-        $r = $this->remittance(['method' => 'Direct Cash', 'remit_bdt' => '35000.50', 'amount' => '500']);
-        $this->assertSame('Other', $r['method']);
-        $this->assertSame('35000.50', $r['remit_bdt']);
-        $this->assertSame('0.00', $r['amount']);
-        $this->assertFalse($r['incentive']);
+        $bank = $this->remittance();
+        // Simulate a historical record saved before the bank-only form.
+        ManagerRemittance::query()->where('uuid', $bank['id'])->firstOrFail()
+            ->forceFill([
+                'method' => 'Other',
+                'remit_bdt' => '35000.50',
+                'amount' => '0',
+                'rate' => '0',
+                'charge' => '0',
+                'incentive' => false,
+                'incentive_pct' => '0',
+            ])->save();
 
-        $this->postJson('/api/v1/manager-remittances', ['method' => 'Other', 'occurred_at' => '2026-09-16 09:00'])
-            ->assertStatus(422)->assertJsonPath('error_codes.remit_bdt.0', 'remit_bdt_required');
+        $this->getJson("/api/v1/manager-remittances/{$bank['id']}")
+            ->assertOk()
+            ->assertJsonPath('data.method', 'Other')
+            ->assertJsonPath('data.remit_bdt', '35000.50');
+
+        $this->patchJson("/api/v1/manager-remittances/{$bank['id']}", ['notes' => 'Legacy note'])
+            ->assertOk()
+            ->assertJsonPath('data.method', 'Other')
+            ->assertJsonPath('data.remit_bdt', '35000.50');
+
+        $this->postJson('/api/v1/manager-remittances', [
+            'method' => 'Direct Cash', 'remit_bdt' => '35000.50',
+            'occurred_at' => '2026-09-16 09:00',
+        ])->assertStatus(422)->assertJsonPath('error_codes.method.0', 'bank_only');
     }
 
     public function test_incentive_is_0_to_10_and_charge_rules(): void
@@ -63,7 +82,7 @@ class RemittanceTest extends TestCase
         $r = $this->remittance(['incentive' => false]);
 
         $this->patchJson("/api/v1/manager-remittances/{$r['id']}", ['method' => 'Other'])
-            ->assertStatus(422)->assertJsonPath('error_codes.remit_bdt.0', 'remit_bdt_required');
+            ->assertStatus(422)->assertJsonPath('error_codes.method.0', 'bank_only');
         $this->patchJson("/api/v1/manager-remittances/{$r['id']}", ['charge' => '10', 'charge_type' => 'included'])
             ->assertOk()->assertJsonPath('data.remit_bdt', '51034.50');
 

@@ -115,9 +115,13 @@ final class RemittanceService
         $pick   = fn (string $k, mixed $d = null) => array_key_exists($k, $input) ? $input[$k] : ($stored?->{$k} ?? $d);
         $errors = [];
 
-        $method = $pick('method');
+        // v1.1.290 creates only Bank remittances. Existing legacy methods remain
+        // readable and editable without forcing historical records to change.
+        $method = $pick('method', 'Bank');
         if (!in_array($method, O::REMIT_METHODS, true)) {
-            $errors['method'] = ['method_invalid', 'Choose a method: Bank, Account, Bkash, Nagad, Rocket or Other.'];
+            $errors['method'] = ['method_invalid', 'Choose a valid remittance method.'];
+        } elseif ($method !== 'Bank' && ($stored === null || $stored->method !== $method)) {
+            $errors['method'] = ['bank_only', 'New remittances must use Bank. Existing legacy methods may be edited but not selected for a new record.'];
         }
         $currency = $pick('currency');
         if (!in_array($currency, SenderOptions::CURRENCIES, true)) {
