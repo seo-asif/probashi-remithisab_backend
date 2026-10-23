@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Student;
 
 use App\Http\Controllers\Controller;
+use App\Exceptions\ApiException;
 use App\Http\Responses\ApiResponse;
 use App\Models\StudentExpense;
 use App\Models\StudentFee;
@@ -85,7 +86,7 @@ final class StudentController extends Controller
     public function storeMoneyIn(Request $request): JsonResponse
     {
         [$r, $created] = $this->service->saveMoneyIn(null, $request->only([
-            'id', 'from_recipient_id', 'from_name', 'amount_bdt', 'rate_bdt_per_currency',
+            'id', 'from_id', 'from_recipient_id', 'from_name', 'from_relation', 'amount_bdt', 'rate_bdt_per_currency',
             'estimate_currency', 'method', 'received_on', 'note',
         ]));
 
@@ -100,7 +101,7 @@ final class StudentController extends Controller
     public function updateMoneyIn(Request $request, string $id): JsonResponse
     {
         [$r] = $this->service->saveMoneyIn(StudentMoneyIn::findByUuidOrFail($id), $request->only([
-            'from_recipient_id', 'from_name', 'amount_bdt', 'rate_bdt_per_currency',
+            'from_id', 'from_recipient_id', 'from_name', 'from_relation', 'amount_bdt', 'rate_bdt_per_currency',
             'estimate_currency', 'method', 'received_on', 'note',
         ]));
 
@@ -183,11 +184,7 @@ final class StudentController extends Controller
 
     public function storeFee(Request $request): JsonResponse
     {
-        [$r, $created] = $this->service->saveFee(null, $request->only([
-            'id', 'name', 'amount', 'currency', 'due_on',
-        ]));
-
-        return ApiResponse::success($this->fee($r), $created ? 'Fee saved.' : 'Already saved.', $created ? 201 : 200);
+        $this->rejectRetiredFeeWrites();
     }
 
     public function showFee(string $id): JsonResponse
@@ -197,44 +194,33 @@ final class StudentController extends Controller
 
     public function updateFee(Request $request, string $id): JsonResponse
     {
-        [$r] = $this->service->saveFee(StudentFee::findByUuidOrFail($id), $request->only([
-            'name', 'amount', 'currency', 'due_on',
-        ]));
-
-        return ApiResponse::success($this->fee($r), 'Updated.');
+        $this->rejectRetiredFeeWrites();
     }
 
     public function payFee(Request $request, string $id): JsonResponse
     {
-        $data = $request->validate(['paid_on' => ['sometimes', 'date_format:Y-m-d']]);
-
-        return ApiResponse::success(
-            $this->fee($this->service->markFeePaid(StudentFee::findByUuidOrFail($id), $data['paid_on'] ?? null)),
-            'Fee marked as paid.',
-        );
+        $this->rejectRetiredFeeWrites();
     }
 
     public function unpayFee(string $id): JsonResponse
     {
-        return ApiResponse::success(
-            $this->fee($this->service->unmarkFeePaid(StudentFee::findByUuidOrFail($id))),
-            'Fee marked as unpaid.',
-        );
+        $this->rejectRetiredFeeWrites();
     }
 
     public function deleteFee(string $id): JsonResponse
     {
-        $this->service->deleteFee(StudentFee::findByUuidOrFail($id));
-
-        return ApiResponse::success(null, 'Fee deleted.');
+        $this->rejectRetiredFeeWrites();
     }
 
     public function restoreFee(string $id): JsonResponse
     {
-        return ApiResponse::success(
-            $this->fee($this->service->restoreFee(StudentFee::findByUuidOrFail($id, withTrashed: true))),
-            'Fee restored.',
-        );
+        $this->rejectRetiredFeeWrites();
+    }
+
+    /** Fee creation and mutation are retired in v1.1.290. Read-only legacy retrieval remains for historical export. */
+    private function rejectRetiredFeeWrites(): never
+    {
+        throw new ApiException('STUDENT_FEES_RETIRED', 'Student fees are no longer supported.', 410);
     }
 
     public function summary(Request $request): JsonResponse
@@ -257,6 +243,9 @@ final class StudentController extends Controller
     {
         return [
             'id' => $r->uuid,
+            'from_id' => $r->from_recipient_id
+                ? ($r->fromRecipient?->uuid ?? '__other__')
+                : ($r->from_source_id ?? '__other__'),
             'from_recipient_id' => $r->from_recipient_id ? $r->fromRecipient?->uuid : null,
             'from_name' => $r->from_name,
             'amount_bdt' => Dec::money($r->amount_bdt),

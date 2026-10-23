@@ -15,7 +15,7 @@ class StudentMoneyIn extends Model
     protected $table = 'student_money_in';
 
     protected $fillable = [
-        'uuid', 'from_recipient_id', 'from_name', 'amount_bdt',
+        'uuid', 'from_recipient_id', 'from_source_id', 'from_name', 'amount_bdt',
         'rate_bdt_per_currency', 'estimate_currency', 'method',
         'received_on', 'note',
     ];

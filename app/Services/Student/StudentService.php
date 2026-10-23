@@ -387,7 +387,6 @@ final class StudentService
             'from' => $from,
             'to' => $to,
             'by_currency' => $rows,
-            'pending_fees' => StudentFee::query()->whereNull('paid_on')->count(),
         ];
     }
 
@@ -421,27 +420,73 @@ final class StudentService
             $errors['method'] = ['method_invalid', 'Choose a valid money-received method.'];
         }
 
-        // Stored foreign keys are numeric; incoming API identifiers are UUIDs.
-        // Resolve only the submitted UUID, preserving a linked recipient on PATCH.
-        $fromId = array_key_exists('from_recipient_id', $input)
-            ? $input['from_recipient_id']
-            : $stored?->fromRecipient?->uuid;
+        // New clients submit from_id (family UUID or __other__). Older clients
+        // use from_recipient_id; keep that alias and preserve historic source tokens.
+        if (array_key_exists('from_id', $input) && array_key_exists('from_recipient_id', $input)
+            && $input['from_id'] !== $input['from_recipient_id']) {
+            $errors['from_id'] = ['from_id_conflict', 'Choose one sender identifier.'];
+        }
+
+        $fromId = array_key_exists('from_id', $input)
+            ? $input['from_id']
+            : (array_key_exists('from_recipient_id', $input)
+                ? $input['from_recipient_id']
+                : ($stored?->from_source_id ?? $stored?->fromRecipient?->uuid));
         $fromName = $values['from_name'];
         $recipientKey = null;
-        if ($fromId !== null && $fromId !== '' && $fromId !== '__other__') {
+        $sourceId = null;
+        $legacyNames = [
+            '__fam__' => 'পরিবার',
+            '__father__' => 'বাবা',
+            '__mother__' => 'মা',
+            '__sib__' => 'ভাই-বোন',
+        ];
+        $relations = ['বাবা', 'মা', 'ভাই-বোন'];
+        $relation = $input['from_relation'] ?? null;
+
+        if ($relation !== null && (!is_string($relation) || !in_array($relation, $relations, true))) {
+            $errors['from_relation'] = ['relation_invalid', 'Choose বাবা, মা or ভাই-বোন.'];
+        }
+
+        if ($fromId === null || $fromId === '' || $fromId === '__other__') {
+            $sourceId = '__other__';
+        } elseif (is_string($fromId) && array_key_exists($fromId, $legacyNames)) {
+            $sourceId = $fromId;
+            if ($fromName === null || $fromName === '') {
+                $fromName = $legacyNames[$fromId];
+            }
+        } else {
             $recipient = is_string($fromId)
                 ? SenderRecipient::query()->where('uuid', $fromId)->first()
                 : null;
-            if ($recipient === null) {
-                $errors['from_recipient_id'] = ['recipient_not_found', 'Choose one of your family members.'];
+            // An archived family member may remain linked on an existing record,
+            // but cannot be newly selected from the student form.
+            $unchanged = $stored !== null && $recipient !== null
+                && (int) $stored->from_recipient_id === (int) $recipient->id;
+            if ($recipient === null || ($recipient->archived && !$unchanged)) {
+                $errors['from_id'] = ['recipient_not_found', 'Choose an active family member.'];
             } else {
                 $recipientKey = $recipient->id;
                 $fromName = $recipient->name;
             }
+            if ($relation !== null) {
+                $errors['from_relation'] = ['relation_not_allowed', 'A relation is only used for Other.'];
+            }
+        }
+
+        if ($sourceId !== null && $relation !== null && !isset($errors['from_relation'])) {
+            // Do not double-append a relation when editing an existing receipt.
+            $base = is_string($fromName)
+                ? trim((string) preg_replace('/\s+\((?:বাবা|মা|ভাই-বোন)\)$/u', '', $fromName))
+                : '';
+            if (in_array($base, $relations, true)) {
+                $base = '';
+            }
+            $fromName = $base === '' ? $relation : $base . ' (' . $relation . ')';
         }
 
         if (!$this->validPlainName($fromName, 60)) {
-            $errors['from_name'] = ['from_name_invalid', 'Enter a sender name (maximum 60 characters).'];
+            $errors['from_name'] = ['from_name_invalid', 'Enter a sender name or relation (maximum 60 characters).'];
         }
 
         $date = $values['received_on'] ?? $this->today();
@@ -456,6 +501,7 @@ final class StudentService
 
         return [
             'from_recipient_id' => $recipientKey,
+            'from_source_id' => $sourceId,
             'from_name' => trim($fromName),
             'amount_bdt' => Dec::of($amount),
             'rate_bdt_per_currency' => $rate === null || $rate === '' ? null : Dec::of($rate),

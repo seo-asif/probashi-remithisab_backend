@@ -8,6 +8,8 @@ use App\Models\User;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Models\StudentExpense;
 use App\Models\StudentFee;
+use App\Models\StudentMoneyIn;
+use App\Models\SenderRecipient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -74,58 +76,66 @@ final class StudentApiTest extends TestCase
         $this->assertSame('60.00', $rows['FJD']['remaining_as_of_to']);
     }
 
-    public function test_fee_is_counted_only_when_paid_and_never_twice(): void
+    public function test_fee_writes_are_retired_but_historical_fees_remain_readable(): void
     {
         $business = $this->makeBusiness();
         $user = $this->actAs($business);
+        $fee = $this->inStudentContext($business, $user, function (): StudentFee {
+            return StudentFee::create([
+                'uuid' => $this->uuid(), 'name' => 'Tuition',
+                'amount' => '300', 'currency' => 'FJD',
+                'due_on' => now()->format('Y-m-d'),
+            ]);
+        });
 
-        $fee = $this->postJson('/api/v1/student/fees', [
-            'name' => 'Tuition', 'amount' => '300',
-            'currency' => 'FJD',
-            'due_on' => now()->addDays(15)->format('Y-m-d'),
-        ])->assertCreated()->json('data');
+        $this->getJson('/api/v1/student/fees')->assertOk()
+            ->assertJsonPath('data.meta.total', 1);
+        $this->getJson("/api/v1/student/fees/{$fee->uuid}")->assertOk()
+            ->assertJsonPath('data.name', 'Tuition');
 
-        $this->getJson('/api/v1/student/summary')
-            ->assertOk()->assertJsonPath('data.pending_fees', 1);
+        foreach ([
+            ['post', '/api/v1/student/fees', ['name' => 'Another']],
+            ['patch', "/api/v1/student/fees/{$fee->uuid}", ['name' => 'Changed']],
+            ['post', "/api/v1/student/fees/{$fee->uuid}/pay", []],
+            ['post', "/api/v1/student/fees/{$fee->uuid}/unpay", []],
+            ['delete', "/api/v1/student/fees/{$fee->uuid}", []],
+            ['post', "/api/v1/student/fees/{$fee->uuid}/restore", []],
+        ] as [$method, $url, $body]) {
+            $this->json(strtoupper($method), $url, $body)
+                ->assertStatus(410)->assertJsonPath('code', 'STUDENT_FEES_RETIRED');
+        }
 
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/pay", [])
-            ->assertOk()->assertJsonPath('data.paid', true);
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/pay", [])
-            ->assertOk();
-
-        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
-        $summary = $this->getJson('/api/v1/student/summary')->assertOk()->json('data');
-        $spent = collect($summary['by_currency'])->firstWhere('currency', 'FJD');
-        $this->assertSame('300.00', $spent['period_spent']);
-        $this->assertSame(0, $summary['pending_fees']);
-
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/unpay")
-            ->assertOk()->assertJsonPath('data.paid', false);
-        $this->assertSame(0, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
-
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/pay", [])
-            ->assertOk();
-        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
-        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::withTrashed()->count()));
+        $this->assertSame('Tuition', $this->inStudentContext(
+            $business, $user, fn () => StudentFee::firstOrFail()->name
+        ));
+        $this->getJson('/api/v1/student/summary')->assertOk()
+            ->assertJsonMissingPath('data.pending_fees');
     }
 
-    public function test_manual_expense_cannot_modify_fee_linked_expense(): void
+    public function test_fee_linked_historical_expense_cannot_be_mutated_through_expense_api(): void
     {
         $business = $this->makeBusiness();
         $user = $this->actAs($business);
-        $fee = $this->postJson('/api/v1/student/fees', [
-            'name' => 'Registration', 'amount' => '75',
-            'currency' => 'FJD', 'due_on' => now()->format('Y-m-d'),
-        ])->assertCreated()->json('data');
+        $expense = $this->inStudentContext($business, $user, function (): StudentExpense {
+            $fee = StudentFee::create([
+                'uuid' => $this->uuid(), 'name' => 'Registration',
+                'amount' => '75', 'currency' => 'FJD',
+                'due_on' => now()->format('Y-m-d'), 'paid_on' => now()->format('Y-m-d'),
+            ]);
 
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/pay")->assertOk();
-        $expense = $this->inStudentContext($business, $user, fn () => StudentExpense::query()->firstOrFail());
-        $this->patchJson("/api/v1/student/expenses/{$expense->uuid}", [
-            'amount' => '1',
-        ])->assertStatus(409)->assertJsonPath('code', 'STUDENT_FEE_LINKED');
+            return StudentExpense::create([
+                'uuid' => $this->uuid(), 'student_fee_id' => $fee->id,
+                'category' => 'education', 'amount' => '75', 'currency' => 'FJD',
+                'spent_on' => now()->format('Y-m-d'),
+            ]);
+        });
 
+        $this->patchJson("/api/v1/student/expenses/{$expense->uuid}", ['amount' => '1'])
+            ->assertStatus(409)->assertJsonPath('code', 'STUDENT_FEE_LINKED');
         $this->deleteJson("/api/v1/student/expenses/{$expense->uuid}")
             ->assertStatus(409)->assertJsonPath('code', 'STUDENT_FEE_LINKED');
+        $this->getJson('/api/v1/student/summary')->assertOk()
+            ->assertJsonMissingPath('data.pending_fees');
     }
 
     public function test_duplicate_expense_uuid_does_not_create_a_second_expense(): void
@@ -176,29 +186,70 @@ final class StudentApiTest extends TestCase
             ->assertOk()->assertJsonPath('data.amount', '5.00');
     }
 
-    public function test_delete_and_restore_fee_preserves_one_linked_expense(): void
+    public function test_money_in_accepts_family_id_and_preserves_legacy_alias(): void
     {
-        $business = $this->makeBusiness();
-        $user = $this->actAs($business);
+        $this->actAs($this->makeBusiness());
+        $family = $this->recipient();
+        $saved = $this->postJson('/api/v1/student/money-in', [
+            'from_id' => $family['id'], 'amount_bdt' => '1000', 'method' => 'Bank',
+        ])->assertCreated()->assertJsonPath('data.from_id', $family['id'])
+            ->assertJsonPath('data.from_recipient_id', $family['id'])
+            ->assertJsonPath('data.from_name', $family['name'])->json('data');
 
-        $fee = $this->postJson('/api/v1/student/fees', [
-            'name' => 'Tuition',
-            'amount' => '200',
-            'currency' => 'FJD',
-            'due_on' => now()->format('Y-m-d'),
-        ])->assertCreated()->json('data');
+        $this->patchJson("/api/v1/student/money-in/{$saved['id']}", [
+            'from_recipient_id' => $family['id'], 'note' => 'Updated',
+        ])->assertOk()->assertJsonPath('data.from_id', $family['id']);
+    }
 
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/pay")->assertOk();
-        $this->deleteJson("/api/v1/student/fees/{$fee['id']}")
-            ->assertOk();
-        $this->assertDatabaseCount('student_expenses', 1);
-        $this->assertSame(0, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
+    public function test_money_in_other_relation_and_legacy_tokens_round_trip(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $other = $this->postJson('/api/v1/student/money-in', [
+            'from_id' => '__other__', 'from_name' => 'Karim',
+            'from_relation' => 'বাবা', 'amount_bdt' => '1000',
+        ])->assertCreated()->assertJsonPath('data.from_name', 'Karim (বাবা)')
+            ->assertJsonPath('data.from_id', '__other__')->json('data');
 
-        $this->postJson("/api/v1/student/fees/{$fee['id']}/restore")
-            ->assertOk()->assertJsonPath('data.paid', true);
+        $this->patchJson("/api/v1/student/money-in/{$other['id']}", [
+            'note' => 'Edited',
+        ])->assertOk()->assertJsonPath('data.from_name', 'Karim (বাবা)')
+            ->assertJsonPath('data.from_id', '__other__');
 
-        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentExpense::query()->count()));
-        $this->assertSame(1, $this->inStudentContext($business, $user, fn () => StudentFee::query()->count()));
+        $this->postJson('/api/v1/student/money-in', [
+            'from_id' => '__other__', 'from_relation' => 'মা',
+            'amount_bdt' => '100',
+        ])->assertCreated()->assertJsonPath('data.from_name', 'মা');
+
+        foreach (['__fam__', '__father__', '__mother__', '__sib__'] as $token) {
+            $this->postJson('/api/v1/student/money-in', [
+                'from_id' => $token, 'amount_bdt' => '100',
+            ])->assertCreated()->assertJsonPath('data.from_id', $token);
+        }
+    }
+
+    public function test_money_in_rejects_invalid_family_and_conflicting_ids(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $family = $this->recipient();
+
+        $this->postJson('/api/v1/student/money-in', [
+            'from_id' => $family['id'], 'from_recipient_id' => '__other__',
+            'amount_bdt' => '100',
+        ])->assertStatus(422)->assertJsonPath('error_codes.from_id.0', 'from_id_conflict');
+
+        $this->postJson('/api/v1/student/money-in', [
+            'from_id' => $this->uuid(), 'amount_bdt' => '100',
+        ])->assertStatus(422)->assertJsonPath('error_codes.from_id.0', 'recipient_not_found');
+
+        $this->postJson('/api/v1/student/money-in', [
+            'from_id' => '__other__', 'from_name' => 'Karim',
+            'from_relation' => 'wrong', 'amount_bdt' => '100',
+        ])->assertStatus(422)->assertJsonPath('error_codes.from_relation.0', 'relation_invalid');
+
+        $this->postJson("/api/v1/sender-recipients/{$family['id']}/archive")->assertOk();
+        $this->postJson('/api/v1/student/money-in', [
+            'from_id' => $family['id'], 'amount_bdt' => '100',
+        ])->assertStatus(422)->assertJsonPath('error_codes.from_id.0', 'recipient_not_found');
     }
 
     /**
