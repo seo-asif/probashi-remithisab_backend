@@ -32,7 +32,7 @@ class RemittanceTest extends TestCase
     {
         $bank = $this->remittance();
         // Simulate a historical record saved before the bank-only form.
-        ManagerRemittance::query()->where('uuid', $bank['id'])->firstOrFail()
+        ManagerRemittance::withoutGlobalScopes()->where('uuid', $bank['id'])->firstOrFail()
             ->forceFill([
                 'method' => 'Other',
                 'remit_bdt' => '35000.50',
