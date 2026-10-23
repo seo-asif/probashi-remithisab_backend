@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Compatibility;
 
-use App\Models\SenderRecipient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -83,8 +82,9 @@ class Phase58ProfileArchiveTest extends TestCase
     {
         $family = $this->postJson('/api/v1/sender-recipients', ['name' => 'Old Family'])
             ->assertCreated()->json('data');
-        SenderRecipient::query()->where('uuid', $family['id'])
-            ->update(['created_at' => now()->subMinutes(11)]);
+        // Move the application clock forward rather than rewriting a model timestamp.
+        // This tests the real elapsed-time rule regardless of DB timestamp precision.
+        $this->travel(11)->minutes();
 
         $this->deleteJson("/api/v1/sender-recipients/{$family['id']}/delete-new")
             ->assertStatus(409)->assertJsonPath('code', 'PROFILE_DELETE_WINDOW_EXPIRED');
@@ -103,7 +103,7 @@ class Phase58ProfileArchiveTest extends TestCase
 
         $this->postJson("/api/v1/sender-recipients/{$family['id']}/archive")->assertOk();
         $this->getJson("/api/v1/sender-remittances/{$remittance['id']}")->assertOk()
-            ->assertJsonPath('data.recipient_id', $family['id']);
+            ->assertJsonPath('data.recipient.id', $family['id']);
 
         $this->postJson('/api/v1/sender-remittances', $this->senderPayload([
             'recipient_type' => 'family', 'recipient_id' => $family['id'],
