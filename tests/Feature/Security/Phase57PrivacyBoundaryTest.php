@@ -3,6 +3,7 @@
 namespace Tests\Feature\Security;
 
 use App\Models\AuditLog;
+use App\Services\Student\StudentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -37,12 +38,16 @@ final class Phase57PrivacyBoundaryTest extends TestCase
     {
         $this->actAs($this->makeBusiness());
 
-        $this->postJson('/api/v1/student/fees', [
+        // Student-fee API writes are retired (HTTP 410). Keep testing the
+        // legacy service's audit redaction for historical/internal records.
+        [$fee, $created] = app(StudentService::class)->saveFee(null, [
             'name' => 'Private Student Name',
             'amount' => '350.00',
             'currency' => 'FJD',
             'due_on' => now()->format('Y-m-d'),
-        ])->assertCreated();
+        ]);
+        $this->assertTrue($created);
+        $this->assertSame('Private Student Name', $fee->name);
 
         $audit = AuditLog::query()
             ->where('action', 'student_fee.created')
