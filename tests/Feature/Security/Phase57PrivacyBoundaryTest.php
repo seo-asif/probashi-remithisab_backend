@@ -36,16 +36,19 @@ final class Phase57PrivacyBoundaryTest extends TestCase
 
     public function test_fee_title_is_not_copied_to_audit_metadata(): void
     {
-        $this->actAs($this->makeBusiness());
+        $business = $this->makeBusiness();
+        $user = $this->actAs($business);
 
-        // Student-fee API writes are retired (HTTP 410). Keep testing the
-        // legacy service's audit redaction for historical/internal records.
-        [$fee, $created] = app(StudentService::class)->saveFee(null, [
-            'name' => 'Private Student Name',
-            'amount' => '350.00',
-            'currency' => 'FJD',
-            'due_on' => now()->format('Y-m-d'),
-        ]);
+        // Student-fee API writes are retired (HTTP 410). Exercise the legacy
+        // service inside an explicit owner/tenant context to verify redaction.
+        [$fee, $created] = $this->inStudentContext($business, $user, fn () =>
+            app(StudentService::class)->saveFee(null, [
+                'name' => 'Private Student Name',
+                'amount' => '350.00',
+                'currency' => 'FJD',
+                'due_on' => now()->format('Y-m-d'),
+            ])
+        );
         $this->assertTrue($created);
         $this->assertSame('Private Student Name', $fee->name);
 
