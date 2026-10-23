@@ -319,7 +319,11 @@ final class SenderService
             }
         }
 
-        $money = ['amount' => $pick('amount'), 'rate' => $pick('rate'), 'charge' => $pick('charge'), 'charge_type' => $pick('charge_type'), 'incentive_pct' => $pick('incentive_pct', '0')];
+        $rate = $pick('rate');
+        if ($stored && !array_key_exists('rate', $input) && \App\Support\Money\CurrencyRules::supported($currency)) {
+            $rate = \App\Support\Money\CurrencyRules::storedRate($rate, $currency);
+        }
+        $money = ['amount' => $pick('amount'), 'rate' => $rate, 'charge' => $pick('charge'), 'charge_type' => $pick('charge_type'), 'incentive_pct' => $pick('incentive_pct', '0')];
         $errors += SenderValidation::moneyErrors($money, is_string($currency) ? $currency : 'FJD');
 
         $calc = null;

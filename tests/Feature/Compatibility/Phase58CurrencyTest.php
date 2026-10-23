@@ -82,6 +82,54 @@ class Phase58CurrencyTest extends TestCase
             ->assertJsonPath('data.effective_rate', '0.0025');
     }
 
+    public function test_stored_rates_are_normalized_only_when_precision_is_insignificant(): void
+    {
+        $this->assertSame('52.00', CurrencyRules::storedRate('52.0000', 'FJD'));
+        $this->assertSame('52.00', CurrencyRules::storedRate('52.00', 'FJD'));
+        $this->assertSame('0.0025', CurrencyRules::storedRate('0.0025', 'KRW'));
+        $this->assertSame('1.2345', CurrencyRules::storedRate('1.2345', 'JPY'));
+        $this->assertSame('52.1234', CurrencyRules::storedRate('52.1234', 'FJD'));
+    }
+
+    public function test_partial_edits_work_with_database_four_decimal_padding(): void
+    {
+        $sender = $this->postJson('/api/v1/sender-remittances', $this->senderPayload())
+            ->assertCreated()->json('data');
+        $this->patchJson("/api/v1/sender-remittances/{$sender['id']}", ['notes' => 'updated'])
+            ->assertOk()->assertJsonPath('data.rate', '50.00');
+
+        $customer = $this->customer();
+        $tx = $this->postJson('/api/v1/manager-transactions', $this->txPayload($customer['id']))
+            ->assertCreated()->json('data');
+        $this->patchJson("/api/v1/manager-transactions/{$tx['id']}", ['rate' => '52'])
+            ->assertOk();
+        $this->patchJson("/api/v1/manager-transactions/{$tx['id']}", ['status' => 'currency_received'])
+            ->assertOk()->assertJsonPath('data.rate', '52.00');
+
+        $remittance = $this->postJson('/api/v1/manager-remittances', [
+            'method' => 'Bank', 'currency' => 'FJD', 'amount' => '1000',
+            'rate' => '50', 'charge' => '0', 'incentive' => false,
+            'occurred_at' => '2026-09-16 09:00',
+        ])->assertCreated()->json('data');
+        $this->patchJson("/api/v1/manager-remittances/{$remittance['id']}", ['notes' => 'updated'])
+            ->assertOk()->assertJsonPath('data.rate', '50.00');
+    }
+
+    public function test_changing_currency_requires_new_rate_when_precision_is_incompatible(): void
+    {
+        $sender = $this->postJson('/api/v1/sender-remittances', $this->senderPayload([
+            'currency' => 'JPY', 'amount' => '1000', 'rate' => '1.2345',
+            'charge' => '0', 'incentive_pct' => '0',
+        ]))->assertCreated()->json('data');
+
+        $this->patchJson("/api/v1/sender-remittances/{$sender['id']}", ['currency' => 'FJD'])
+            ->assertStatus(422)->assertJsonPath('error_codes.rate.0', 'rate_invalid');
+
+        $this->patchJson("/api/v1/sender-remittances/{$sender['id']}", [
+            'currency' => 'FJD', 'rate' => '52.50',
+        ])->assertOk()->assertJsonPath('data.rate', '52.50');
+    }
+
     public function test_manager_enforces_currency_caps(): void
     {
         $customer = $this->customer();

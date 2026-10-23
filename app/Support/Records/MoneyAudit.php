@@ -98,6 +98,12 @@ final class MoneyAudit
         foreach ($record->getAttributes() as $key => $value) {
             $cast = $record->getAttribute($key);
 
+            // DECIMAL(10,4) hydrates 52.00 as 52.0000. Keep historical
+            // two-decimal audit snapshots stable while retaining KRW/JPY precision.
+            if ($key === 'rate' && is_string($record->getAttribute('currency'))) {
+                $cast = \App\Support\Money\CurrencyRules::storedRate($cast, $record->getAttribute('currency'));
+            }
+
             $out[$key] = $cast instanceof \DateTimeInterface
             ? $cast->format('Y-m-d\TH:i:s\Z')
             : $cast;

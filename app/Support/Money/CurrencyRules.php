@@ -45,4 +45,22 @@ final class CurrencyRules
     {
         return self::LIMITS[$currency][2];
     }
+
+    /**
+     * Normalize a rate hydrated from DECIMAL(10,4) to the currency's API precision.
+     * Only remove insignificant trailing zeros. Never silently round a real rate.
+     * This is for stored values only: new client inputs must pass strict validation.
+     */
+    public static function storedRate(mixed $rate, string $currency): mixed
+    {
+        if (!self::supported($currency) || !FinancialNumber::isValid($rate, 4)) {
+            return $rate;
+        }
+
+        $precision = self::rateDecimals($currency);
+        $original = Dec::of($rate, 4);
+        $normalized = Dec::of($rate, $precision);
+
+        return bccomp($original, $normalized, 4) === 0 ? $normalized : $rate;
+    }
 }

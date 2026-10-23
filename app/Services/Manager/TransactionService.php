@@ -483,11 +483,15 @@ final class TransactionService
         }
 
         $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
+        $rate = $pick('rate');
+        if ($stored && !array_key_exists('rate', $input)) {
+            $rate = \App\Support\Money\CurrencyRules::storedRate($rate, $limitsCurrency);
+        }
         foreach ([
             ['amount', 'an amount', \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), 2],
             ['rate', 'an exchange rate', \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)],
         ] as [$f, $label, $max, $decimals]) {
-            if ($e = MoneyField::check($pick($f), $f, $label, $max, decimals: $decimals)) {
+            if ($e = MoneyField::check($f === 'rate' ? $rate : $pick($f), $f, $label, $max, decimals: $decimals)) {
                 $errors[$f] = $e;
             }
         }
@@ -510,7 +514,7 @@ final class TransactionService
 
         $calc = null;
         if (!isset($errors['amount']) && !isset($errors['rate']) && !isset($errors['receive_method'])) {
-            $calc = ManagerCalculator::transaction($pick('amount'), $pick('rate'), $method, isset($errors['withdrawal_charge']) ? 0 : $withdrawal, isset($errors['commission']) ? 0 : $pick('commission'));
+            $calc = ManagerCalculator::transaction($pick('amount'), $rate, $method, isset($errors['withdrawal_charge']) ? 0 : $withdrawal, isset($errors['commission']) ? 0 : $pick('commission'));
             if ($wallet && !isset($errors['withdrawal_charge'])) {
                 $max = Dec::percentOf($calc['base_bdt'], O::WITHDRAWAL_MAX_PERCENT);
                 if (bccomp(Dec::of($withdrawal), $max, 8) > 0) {
@@ -595,7 +599,7 @@ final class TransactionService
             'customer_name'     => $customer->name,
             'currency'          => $currency,
             'amount'            => Dec::of($pick('amount')),
-            'rate'              => Dec::of($pick('rate'), \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)),
+            'rate'              => Dec::of($rate, \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)),
             'commission'        => Dec::of($pick('commission')),
             'receive_method'    => $method,
             'pay_to'            => $payTo,

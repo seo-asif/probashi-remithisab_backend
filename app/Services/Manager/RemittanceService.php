@@ -140,6 +140,9 @@ final class RemittanceService
             [$amount, $rate, $charge, $pct] = [$pick('amount'), $pick('rate'), $pick('charge'), $incentive ? $pick('incentive_pct') : '0'];
 
             $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
+            if ($stored && !array_key_exists('rate', $input)) {
+                $rate = \App\Support\Money\CurrencyRules::storedRate($rate, $limitsCurrency);
+            }
             foreach ([
                 ['amount', 'an amount', \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), $amount, 2],
                 ['rate', 'an exchange rate', \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), $rate, \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)],
