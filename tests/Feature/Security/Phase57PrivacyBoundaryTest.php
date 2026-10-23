@@ -4,6 +4,7 @@ namespace Tests\Feature\Security;
 
 use App\Models\AuditLog;
 use App\Services\Student\StudentService;
+use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -41,7 +42,7 @@ final class Phase57PrivacyBoundaryTest extends TestCase
 
         // Student-fee API writes are retired (HTTP 410). Exercise the legacy
         // service inside an explicit owner/tenant context to verify redaction.
-        [$fee, $created] = $this->inStudentContext($business, $user, fn () =>
+        [$fee, $created] = app(CurrentBusiness::class)->runAsUser($business, $user->id, fn () =>
             app(StudentService::class)->saveFee(null, [
                 'name' => 'Private Student Name',
                 'amount' => '350.00',
