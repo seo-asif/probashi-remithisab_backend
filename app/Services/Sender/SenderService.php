@@ -320,7 +320,7 @@ final class SenderService
         }
 
         $money = ['amount' => $pick('amount'), 'rate' => $pick('rate'), 'charge' => $pick('charge'), 'charge_type' => $pick('charge_type'), 'incentive_pct' => $pick('incentive_pct', '0')];
-        $errors += SenderValidation::moneyErrors($money);
+        $errors += SenderValidation::moneyErrors($money, is_string($currency) ? $currency : 'FJD');
 
         $calc = null;
         if (!array_intersect_key($errors, array_flip(['amount', 'rate', 'charge', 'charge_type', 'incentive_pct']))) {
@@ -349,7 +349,7 @@ final class SenderService
             'recipient_name' => $recipient ? $recipient->name : SenderRemittance::MYSELF_NAME,
             'currency'       => $currency,
             'amount'         => Dec::of($money['amount']),
-            'rate'           => Dec::of($money['rate']),
+            'rate'           => Dec::of($money['rate'], \App\Support\Money\CurrencyRules::rateDecimals($currency)),
             'charge'         => Dec::of($money['charge']),
             'charge_type'    => $money['charge_type'],
             'incentive_pct'  => Dec::of($money['incentive_pct']),

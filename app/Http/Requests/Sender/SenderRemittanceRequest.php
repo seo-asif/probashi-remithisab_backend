@@ -102,15 +102,17 @@ class SenderRemittanceRequest extends FormRequest
     }
 
     /** Field rules that need no database. Used by the tests and the sync endpoint. */
-    public static function baseRules(bool $partial): array
+    public static function baseRules(bool $partial, string $currency = 'FJD'): array
     {
         $required = $partial ? 'sometimes' : 'required';
+        $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
+        $rateDecimals = \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency);
 
         return [
             'client_uuid'  => ['sometimes', 'nullable', 'uuid'],
             'currency'     => [$required, Rule::in(SenderOptions::CURRENCIES)],
-            'amount'       => [$required, 'numeric', 'min:' . SenderOptions::AMOUNT_MIN, 'max:' . SenderOptions::AMOUNT_MAX, 'decimal:0,2'],
-            'rate'         => [$required, 'numeric', 'min:' . SenderOptions::RATE_MIN, 'max:' . SenderOptions::RATE_MAX, 'decimal:0,2'],
+            'amount'       => [$required, 'numeric', 'min:' . SenderOptions::AMOUNT_MIN, 'max:' . \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), 'decimal:0,2'],
+            'rate'         => [$required, 'numeric', 'min:' . ($rateDecimals === 4 ? '0.0001' : SenderOptions::RATE_MIN), 'max:' . \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), 'decimal:0,' . $rateDecimals],
             'payment_mode' => [$required, Rule::in(SenderOptions::PAYMENT_MODES)],
             'charge'       => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:' . SenderOptions::CHARGE_MAX, 'decimal:0,2'],
             'remit_date'   => [$required, 'date_format:Y-m-d'],
@@ -119,9 +121,9 @@ class SenderRemittanceRequest extends FormRequest
     }
 
     /** The recipient must be one of THIS user's own active family members. */
-    public static function ruleSet(int $businessId, int $userId, bool $partial): array
+    public static function ruleSet(int $businessId, int $userId, bool $partial, string $currency = 'FJD'): array
     {
-        return self::baseRules($partial) + [
+        return self::baseRules($partial, $currency) + [
             'family_member_id' => [$partial ? 'sometimes' : 'required', 'uuid',
                 Rule::exists('family_members', 'uuid')
                     ->where('business_id', $businessId)

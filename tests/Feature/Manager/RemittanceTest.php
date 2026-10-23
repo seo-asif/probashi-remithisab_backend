@@ -55,7 +55,7 @@ class RemittanceTest extends TestCase
         $this->postJson('/api/v1/manager-remittances', [...$base, 'remit_bdt' => '1'])
             ->assertStatus(422)->assertJsonPath('error_codes.remit_bdt.0', 'calc_mismatch');
         $this->postJson('/api/v1/manager-remittances', [...$base, 'amount' => '10000000', 'rate' => '400'])
-            ->assertStatus(422)->assertJsonPath('error_codes.amount.0', 'result_out_of_range');
+            ->assertStatus(422)->assertJsonPath('error_codes.amount.0', 'amount_too_large');
     }
 
     public function test_edits_are_checked_as_a_whole_and_logged(): void

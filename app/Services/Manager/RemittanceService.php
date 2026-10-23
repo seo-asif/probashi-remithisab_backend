@@ -139,8 +139,12 @@ final class RemittanceService
         } else {
             [$amount, $rate, $charge, $pct] = [$pick('amount'), $pick('rate'), $pick('charge'), $incentive ? $pick('incentive_pct') : '0'];
 
-            foreach ([['amount', 'an amount', O::REMIT_AMOUNT_MAX, $amount], ['rate', 'an exchange rate', O::RATE_MAX, $rate]] as [$f, $label, $max, $v]) {
-                if ($e = MoneyField::check($v, $f, $label, $max)) {
+            $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
+            foreach ([
+                ['amount', 'an amount', \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), $amount, 2],
+                ['rate', 'an exchange rate', \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), $rate, \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)],
+            ] as [$f, $label, $max, $v, $decimals]) {
+                if ($e = MoneyField::check($v, $f, $label, $max, decimals: $decimals)) {
                     $errors[$f] = $e;
                 }
             }
@@ -194,7 +198,7 @@ final class RemittanceService
             'method'        => $method,
             'currency'      => $currency,
             'amount'        => Dec::of($amount),
-            'rate'          => Dec::of($rate),
+            'rate'          => Dec::of($rate, \App\Support\Money\CurrencyRules::rateDecimals(\App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD')),
             'charge'        => Dec::of($charge),
             'charge_type'   => $chargeType,
             'incentive'     => $incentive,

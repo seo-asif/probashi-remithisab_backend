@@ -23,7 +23,7 @@ class SenderRemittanceResource extends JsonResource
             'recipient'      => ['id' => $recipient?->uuid, 'name' => $this->recipient_name, 'deleted' => (bool) $recipient?->trashed()],
             'currency'       => $this->currency,
             'amount'         => Dec::money($this->amount),
-            'rate'           => Dec::money($this->rate),
+            'rate'           => Dec::of($this->rate, \App\Support\Money\CurrencyRules::rateDecimals($this->currency)),
             'charge'         => Dec::money($this->charge),
             'charge_type'    => $this->charge_type,
             'incentive_pct'  => Dec::money($this->incentive_pct),

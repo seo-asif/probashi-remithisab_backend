@@ -24,7 +24,7 @@ final class ManagerCalculator
     /** @return array{base_bdt: string, withdrawal_charge: string, obligation_bdt: string, customer_pays: string} */
     public static function transaction(mixed $amount, mixed $rate, string $method, mixed $withdrawalCharge, mixed $commission): array
     {
-        $base       = Dec::round(bcmul(Dec::of($amount), Dec::of($rate), 8), 2);
+        $base       = Dec::round(bcmul(Dec::of($amount), Dec::of($rate, 4), 8), 2);
         $withdrawal = self::isWallet($method) ? Dec::of($withdrawalCharge) : '0.00';
 
         return [
@@ -58,7 +58,7 @@ final class ManagerCalculator
         }
 
         $principal = self::principal($amount, $charge, $chargeType);
-        $base      = bcmul($principal, Dec::of($rate), 8);
+        $base      = bcmul($principal, Dec::of($rate, 4), 8);
         $extra     = bcdiv(bcmul($base, $incentive ? Dec::of($pct) : '0', 8), '100', 8);
 
         return [

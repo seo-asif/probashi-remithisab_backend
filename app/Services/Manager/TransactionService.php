@@ -482,8 +482,12 @@ final class TransactionService
             $errors['currency'] = ['currency_invalid', 'Choose a currency from the list.'];
         }
 
-        foreach ([['amount', 'an amount', O::AMOUNT_MAX], ['rate', 'an exchange rate', O::RATE_MAX]] as [$f, $label, $max]) {
-            if ($e = MoneyField::check($pick($f), $f, $label, $max)) {
+        $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
+        foreach ([
+            ['amount', 'an amount', \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), 2],
+            ['rate', 'an exchange rate', \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)],
+        ] as [$f, $label, $max, $decimals]) {
+            if ($e = MoneyField::check($pick($f), $f, $label, $max, decimals: $decimals)) {
                 $errors[$f] = $e;
             }
         }
@@ -591,7 +595,7 @@ final class TransactionService
             'customer_name'     => $customer->name,
             'currency'          => $currency,
             'amount'            => Dec::of($pick('amount')),
-            'rate'              => Dec::of($pick('rate')),
+            'rate'              => Dec::of($pick('rate'), \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)),
             'commission'        => Dec::of($pick('commission')),
             'receive_method'    => $method,
             'pay_to'            => $payTo,
