@@ -25,6 +25,8 @@ class CustomerResource extends JsonResource
             'created_at'     => BusinessClock::utcIso($this->created_at),
             'updated_at'     => BusinessClock::utcIso($this->updated_at),
             'deleted_at'     => $this->deleted_at ? BusinessClock::utcIso($this->deleted_at) : null,
+            'archived'       => (bool) $this->archived,
+            'archived_at'    => $this->archived_at ? BusinessClock::utcIso($this->archived_at) : null,
         ];
     }
 

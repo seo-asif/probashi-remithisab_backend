@@ -105,6 +105,9 @@ Route::prefix('v1')->group(function () {
             Route::patch('/customers/{id}', 'update');
             Route::delete('/customers/{id}', 'destroy');
             Route::post('/customers/{id}/restore', 'restore');
+            Route::post('/customers/{id}/archive', 'archive');
+            Route::post('/customers/{id}/unarchive', 'unarchive');
+            Route::delete('/customers/{id}/delete-new', 'deleteNew');
         });
         Route::controller(TransactionController::class)->group(function () {
             Route::get('/manager-transactions', 'index');
@@ -140,6 +143,9 @@ Route::prefix('v1')->group(function () {
             Route::patch('/sender-recipients/{id}', 'update');
             Route::delete('/sender-recipients/{id}', 'destroy');
             Route::post('/sender-recipients/{id}/restore', 'restore');
+            Route::post('/sender-recipients/{id}/archive', 'archive');
+            Route::post('/sender-recipients/{id}/unarchive', 'unarchive');
+            Route::delete('/sender-recipients/{id}/delete-new', 'deleteNew');
         });
         Route::controller(SenderRemittanceController::class)->group(function () {
             Route::get('/sender-remittances', 'index');

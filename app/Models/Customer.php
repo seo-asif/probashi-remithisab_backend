@@ -23,6 +23,8 @@ class Customer extends Model
         'address',
         'notes',
         'attention',
+        'archived',
+        'archived_at',
         'bkash_numbers',
         'nagad_numbers',
         'rocket_numbers',
@@ -33,6 +35,8 @@ class Customer extends Model
     {
         return [
             'attention'      => 'boolean',
+            'archived'       => 'boolean',
+            'archived_at'    => 'datetime',
             'phone'          => 'encrypted',
             'bkash_numbers'  => 'encrypted:array',
             'nagad_numbers'  => 'encrypted:array',

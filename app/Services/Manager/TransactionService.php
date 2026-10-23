@@ -463,7 +463,11 @@ final class TransactionService
         // customer
         $customer = $stored?->customer;
         if (array_key_exists('customer_id', $input) || !$stored) {
-            $customer = is_string($input['customer_id'] ?? null) ? Customer::query()->where('uuid', $input['customer_id'])->first() : null;
+            $customer = is_string($input['customer_id'] ?? null) ? Customer::query()
+                ->where('uuid', $input['customer_id'])
+                ->where(fn ($q) => $q->where('archived', false)
+                    ->orWhere('id', $stored?->customer_id ?? 0))
+                ->first() : null;
             if (!$customer) {
                 $errors['customer_id'] = ['customer_required', 'Select a customer first.'];
             }

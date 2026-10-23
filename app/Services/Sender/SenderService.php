@@ -11,6 +11,7 @@ use App\Support\Money\MoneyField;
 use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
+use App\Support\Records\ProfileDeletion;
 use App\Support\Records\RecordTime;
 use App\Support\Sender\SenderCalculator;
 use App\Support\Sender\SenderOptions as O;
@@ -104,6 +105,27 @@ final class SenderService
         });
 
         return $r->refresh();
+    }
+
+    /** Archive and restore are always allowed, even when the account is over its Free limit. */
+    public function setRecipientArchived(SenderRecipient $recipient, bool $archived): SenderRecipient
+    {
+        return DB::transaction(function () use ($recipient, $archived): SenderRecipient {
+            $locked = SenderRecipient::query()->whereKey($recipient->getKey())->lockForUpdate()->firstOrFail();
+            if ((bool) $locked->archived !== $archived) {
+                $locked->forceFill([
+                    'archived' => $archived,
+                    'archived_at' => $archived ? now() : null,
+                ])->save();
+            }
+
+            return $locked->refresh();
+        });
+    }
+
+    public function permanentlyDeleteRecipient(SenderRecipient $recipient): void
+    {
+        ProfileDeletion::permanent($recipient);
     }
 
     private function recipientAttributes(array $data, bool $partial = false): array
@@ -282,7 +304,11 @@ final class SenderService
         $recipient = null;
         if ($type === O::RECIPIENT_FAMILY) {
             if (array_key_exists('recipient_id', $input) || $stored?->recipient_type !== O::RECIPIENT_FAMILY) {
-                $recipient = is_string($input['recipient_id'] ?? null) ? SenderRecipient::query()->where('uuid', $input['recipient_id'])->first() : null;
+                $recipient = is_string($input['recipient_id'] ?? null) ? SenderRecipient::query()
+                    ->where('uuid', $input['recipient_id'])
+                    ->where(fn ($q) => $q->where('archived', false)
+                        ->orWhere('id', $stored?->recipient_id ?? 0))
+                    ->first() : null;
                 if (!$recipient) {
                     $errors['recipient_id'] = ['recipient_required', 'Select a saved family member or recipient.'];
                 }
