@@ -37,7 +37,14 @@ class RecipientController extends Controller
             });
         }
 
-        $page = Paging::paginate($query->orderBy('name')->orderBy('id'), $request);
+        // Newest first for v1.1.290; explicit name sort remains available.
+        if ($request->query('sort') === 'name') {
+            $query->orderBy('name')->orderBy('id');
+        } else {
+            $query->orderByDesc('created_at')->orderByDesc('id');
+        }
+
+        $page = Paging::paginate($query, $request);
 
         return ApiResponse::success(Paging::shape($page, fn ($m) => SenderRecipientResource::make($m)->resolve($request)));
     }

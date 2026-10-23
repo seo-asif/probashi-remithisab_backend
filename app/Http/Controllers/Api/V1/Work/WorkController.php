@@ -11,6 +11,7 @@ use App\Models\WorkBonus;
 use App\Models\WorkDay;
 use App\Models\WorkSetting;
 use App\Services\Work\WorkService;
+use App\Support\Api\Paging;
 use App\Support\Money\Dec;
 use App\Support\Reports\ReportPeriod;
 use App\Support\Tenancy\CurrentBusiness;
@@ -119,11 +120,14 @@ class WorkController extends Controller
 
     // ---- salaries
 
-    public function salaries(): JsonResponse
+    public function salaries(Request $request): JsonResponse
     {
-        $items = Salary::query()->with('loanCut')->orderByDesc('to_date')->get()->map(fn ($s) => $this->presentSalary($s))->all();
+        $page = Paging::paginate(Salary::query()->with('loanCut')->orderByDesc('to_date')->orderByDesc('id'), $request);
 
-        return ApiResponse::success(['items' => $items, 'unpaid_days' => count($this->service->unpaidDays())]);
+        return ApiResponse::success([
+            ...Paging::shape($page, fn ($s) => $this->presentSalary($s)),
+            'unpaid_days' => count($this->service->unpaidDays()),
+        ]);
     }
 
     public function suggestSalary(): JsonResponse
@@ -154,11 +158,15 @@ class WorkController extends Controller
 
     // ---- loans
 
-    public function loans(): JsonResponse
+    public function loans(Request $request): JsonResponse
     {
-        $items = LoanEntry::query()->orderBy('entry_date')->orderBy('id')->get()->map(fn ($e) => $this->presentLoan($e))->all();
+        $page = Paging::paginate(LoanEntry::query()->orderByDesc('entry_date')->orderByDesc('id'), $request);
 
-        return ApiResponse::success(['items' => $items, 'loan_left' => $this->service->loanLeft(), 'currency' => $this->service->currency()]);
+        return ApiResponse::success([
+            ...Paging::shape($page, fn ($e) => $this->presentLoan($e)),
+            'loan_left' => $this->service->loanLeft(),
+            'currency' => $this->service->currency(),
+        ]);
     }
 
     public function storeLoan(Request $request): JsonResponse

@@ -121,7 +121,7 @@ class CustomerController extends Controller
 
         $request->query('sort') === 'name'
         ? $query->orderBy('name')->orderBy('id')
-        : $query->orderByDesc('updated_at')->orderByDesc('id');
+        : $query->orderByDesc('created_at')->orderByDesc('id');
 
         $page = Paging::paginate($query, $request);
 

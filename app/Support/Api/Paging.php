@@ -9,12 +9,14 @@ use Illuminate\Http\Request;
 /** Standard list shape: { items: [...], meta: { page, per_page, total, last_page } }. */
 final class Paging
 {
-    public const PER_PAGE_DEFAULT = 20;
+    public const PER_PAGE_DEFAULT = 10;
     public const PER_PAGE_MAX     = 100;
 
     public static function paginate(Builder $query, Request $request): LengthAwarePaginator
     {
-        $perPage = (int) $request->query('per_page', self::PER_PAGE_DEFAULT);
+        // New clients use ?limit=10; older clients may continue to use ?per_page=.
+        // If both are supplied, per_page wins for backward compatibility.
+        $perPage = (int) $request->query('per_page', $request->query('limit', self::PER_PAGE_DEFAULT));
         $perPage = max(1, min(self::PER_PAGE_MAX, $perPage));
         $page    = max(1, (int) $request->query('page', 1));
 
