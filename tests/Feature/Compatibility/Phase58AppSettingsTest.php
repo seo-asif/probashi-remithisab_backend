@@ -90,7 +90,7 @@ class Phase58AppSettingsTest extends TestCase
         $business = $this->makeBusiness();
         $first = $this->actAs($business);
         $this->patchJson('/api/v1/account/settings', ['language' => 'bn', 'mode' => 'manager'])->assertOk();
-        $second = $this->actAs($business);
+        $second = $this->actAs($business, \App\Enums\BusinessRole::Operator);
         $this->getJson('/api/v1/account/settings')->assertOk()
             ->assertJsonPath('data.language', null)
             ->assertJsonPath('data.mode', null);
