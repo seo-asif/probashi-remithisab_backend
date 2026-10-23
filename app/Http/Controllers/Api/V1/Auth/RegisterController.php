@@ -12,6 +12,7 @@ use App\Models\Business;
 use App\Models\BusinessMembership;
 use App\Models\OtpCode;
 use App\Models\User;
+use App\Services\Account\AppSettingsService;
 use App\Services\Auth\AuditLogger;
 use App\Services\Auth\OtpService;
 use App\Support\Auth\OtpTimings;
@@ -53,6 +54,7 @@ class RegisterController extends Controller
 
         return ApiResponse::success([
             'user'                        => UserResource::make($user)->resolve(),
+            'app_settings'                => app(AppSettingsService::class)->snapshot($user, $business),
             'business'                    => BusinessResource::make($business)->resolve(),
             'email_verification_required' => true,
             'otp'                         => OtpTimings::data(),
