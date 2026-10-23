@@ -17,7 +17,7 @@ class Phase58PaginationTest extends TestCase
 
         for ($i = 1; $i <= 12; $i++) {
             $ids[] = $this->recipient([
-                'name' => sprintf('Member %02d', $i),
+                'name' => 'Member ' . chr(64 + $i),
                 'phone' => null,
             ])['id'];
         }
@@ -55,7 +55,7 @@ class Phase58PaginationTest extends TestCase
 
         for ($i = 1; $i <= 3; $i++) {
             $ids[] = $this->postJson('/api/v1/customers', [
-                'name' => "Customer {$i}",
+                'name' => 'Customer ' . chr(64 + $i),
                 'phone' => "0171234500{$i}",
             ])->assertCreated()->json('data.id');
         }
