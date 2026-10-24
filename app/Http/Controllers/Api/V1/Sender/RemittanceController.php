@@ -34,6 +34,27 @@ class RemittanceController extends Controller
     {
     }
 
+    public function options(): JsonResponse
+    {
+        $currencies = [];
+        foreach (CurrencyRules::CURRENCIES as $currency) {
+            $currencies[] = [
+                'code' => $currency,
+                'amount_max' => CurrencyRules::amountMax($currency),
+                'rate_max' => CurrencyRules::rateMax($currency),
+                'rate_decimals' => CurrencyRules::rateDecimals($currency),
+            ];
+        }
+
+        return ApiResponse::success([
+            'currencies' => $currencies,
+            'methods' => SenderOptions::METHODS,
+            'charge_types' => SenderOptions::CHARGE_TYPES,
+            'purposes' => SenderOptions::PURPOSES,
+            'notes_max' => SenderOptions::NOTES_MAX,
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $query = SenderRemittance::query()->with(['recipient', 'goal']);
