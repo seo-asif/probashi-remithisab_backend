@@ -73,7 +73,7 @@ final class DailyMessageAdminController extends Controller
             'actor_user_id' => $request->user()?->id,
             'action' => 'platform.daily_message.'.$action,
             'target_type' => 'daily_message',
-            'target_id' => $message?->uuid,
+            'target_id' => $message?->id,
             'metadata' => $metadata,
             'ip' => $request->ip(),
             'user_agent' => $request->userAgent(),
