@@ -38,11 +38,15 @@ use App\Http\Controllers\Api\V1\Support\VerifyCodeController;
 use App\Http\Controllers\Api\V1\Student\StudentController;
 use App\Http\Controllers\Api\V1\Work\WorkController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\V1\DailyMessageController;
+use App\Http\Controllers\Api\V1\Platform\DailyMessageAdminController;
 
 // All routes are served under /api/v1
 Route::prefix('v1')->group(function () {
 
     Route::get('/health', HealthController::class)->middleware('throttle:60,1');
+    Route::get('/daily-message', [DailyMessageController::class, 'today'])->middleware('throttle:60,1');
+    Route::get('/daily-messages/sync', [DailyMessageController::class, 'sync'])->middleware('throttle:60,1');
 
     // ---- public: account creation, login, email verification, password reset
     Route::post('/auth/register', RegisterController::class)->middleware('throttle:auth-register');
@@ -252,6 +256,14 @@ Route::prefix('v1')->group(function () {
         'platform.admin',
         'throttle:api',
     ])->prefix('platform')->group(function () {
+        Route::controller(DailyMessageAdminController::class)->prefix('daily-messages')->group(function () {
+            Route::get('/', 'index');
+            Route::post('/', 'store');
+            Route::post('/import', 'import');
+            Route::get('/export', 'export');
+            Route::patch('/{id}', 'update');
+            Route::delete('/{id}', 'destroy');
+        });
 
         Route::post('/support/verify', PlatformSupportVerificationController::class)
             ->middleware('throttle:support-code-admin-verify');
