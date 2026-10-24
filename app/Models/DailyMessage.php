@@ -7,7 +7,7 @@ use Illuminate\Support\Str;
 
 final class DailyMessage extends Model
 {
-    protected $fillable = ['code', 'message_bn', 'message_en', 'status', 'sort_order'];
+    protected $fillable = ['code', 'message_bn', 'message_en', 'status', 'sort_order', 'category'];
 
     protected static function booted(): void
     {
