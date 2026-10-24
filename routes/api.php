@@ -29,6 +29,7 @@ use App\Http\Controllers\Api\V1\Platform\PlanPaymentController as PlatformPlanPa
 use App\Http\Controllers\Api\V1\Platform\SupportVerificationController as PlatformSupportVerificationController;
 use App\Http\Controllers\Api\V1\Reports\ReportController;
 use App\Http\Controllers\Api\V1\Reports\CsvExportController;
+use App\Http\Controllers\Api\V1\Reports\PdfExportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
 use App\Http\Controllers\Api\V1\Sender\RecipientController;
 use App\Http\Controllers\Api\V1\Sender\RemittanceController as SenderRemittanceController;
@@ -218,6 +219,10 @@ Route::prefix('v1')->group(function () {
             Route::patch('/spending/{id}', 'updateSpending');
             Route::delete('/spending/{id}', 'deleteSpending');
         });
+
+        // ---- PDF summaries (monthly Free; other periods Unlimited)
+        Route::get('/reports/sender/pdf', [PdfExportController::class, 'sender']);
+        Route::get('/reports/manager/pdf', [PdfExportController::class, 'manager']);
 
         // ---- CSV downloads (Unlimited only, verified by the controller)
         Route::get('/reports/sender/csv', [CsvExportController::class, 'sender']);
