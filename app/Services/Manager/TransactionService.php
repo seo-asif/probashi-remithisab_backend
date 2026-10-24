@@ -4,12 +4,15 @@ namespace App\Services\Manager;
 
 use App\Exceptions\ApiException;
 use App\Models\BdtPayment;
+use App\Models\Business;
 use App\Models\Customer;
 use App\Models\ManagerTransaction;
 use App\Support\Manager\ManagerCalculator;
 use App\Support\Manager\ManagerOptions as O;
 use App\Support\Manager\ManagerValidation;
+use App\Support\Money\CurrencyRules;
 use App\Support\Money\Dec;
+use App\Support\Money\FinancialNumber;
 use App\Support\Money\MoneyField;
 use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
@@ -17,10 +20,12 @@ use App\Support\Records\RecordId;
 use App\Support\Records\RecordTime;
 use App\Support\Security\IdentifierHasher;
 use App\Support\Security\IdentifierNormalizer;
+use App\Support\Sender\SenderOptions;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
 use App\Support\Usage\EditPolicy;
 use App\Support\Validation\Reject;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -41,8 +46,7 @@ final class TransactionService
         private CurrentBusiness $current,
         private IdentifierHasher $identifierHasher,
         private PlanQuotaService $quota,
-    ) {
-    }
+    ) {}
 
     // ------------------------------------------------------------------ transactions
 
@@ -79,7 +83,7 @@ final class TransactionService
             $this->quota->consumeManagerTransaction($business);
 
             // "sent" at creation = received first, then one automatic payment for the full obligation
-            $tx = ManagerTransaction::create([ ...$values, 'status' => $status === O::STATUS_SENT ? O::STATUS_RECEIVED : $status, 'paid_bdt' => 0, 'uuid' => RecordId::make($input['id'] ?? null), 'user_id' => $this->current->userId()]);
+            $tx = ManagerTransaction::create([...$values, 'status' => $status === O::STATUS_SENT ? O::STATUS_RECEIVED : $status, 'paid_bdt' => 0, 'uuid' => RecordId::make($input['id'] ?? null), 'user_id' => $this->current->userId()]);
             MoneyAudit::record('created', $tx, [], MoneyAudit::values($tx));
             if ($status === O::STATUS_SENT) {
                 $this->moveTo($tx, $status, explicit: true);
@@ -91,82 +95,81 @@ final class TransactionService
         return [$tx->refresh(), true];
     }
 
-  public function update(
-    ManagerTransaction $tx,
-    array $input,
-): ManagerTransaction {
-    $values = $this->checked($input, $tx);
+    public function update(
+        ManagerTransaction $tx,
+        array $input,
+    ): ManagerTransaction {
+        $values = $this->checked($input, $tx);
 
-    $explicit = array_key_exists('status', $input)
-        && $input['status'] !== $tx->status;
+        $explicit = array_key_exists('status', $input)
+            && $input['status'] !== $tx->status;
 
-    $paid = Dec::of($tx->paid_bdt);
+        $paid = Dec::of($tx->paid_bdt);
 
-    // M8: the new total can never be below what is already paid
-    if (
-        bccomp($values['obligation_bdt'], $paid, 2) < 0
-        && !in_array(
-            $values['status'],
-            [O::STATUS_PENDING],
-            true,
-        )
-        && !(
-            $explicit
-            && $tx->status === O::STATUS_SENT
-        )
-    ) {
-        Reject::fail([
-            'amount' => [
-                'below_paid',
-                "{$paid} BDT has already been paid. The total cannot be less than that.",
-            ],
-        ]);
-    }
+        // M8: the new total can never be below what is already paid
+        if (
+            bccomp($values['obligation_bdt'], $paid, 2) < 0
+            && ! in_array(
+                $values['status'],
+                [O::STATUS_PENDING],
+                true,
+            )
+            && ! (
+                $explicit
+                && $tx->status === O::STATUS_SENT
+            )
+        ) {
+            Reject::fail([
+                'amount' => [
+                    'below_paid',
+                    "{$paid} BDT has already been paid. The total cannot be less than that.",
+                ],
+            ]);
+        }
 
-    return DB::transaction(
-        function () use ($tx, $values, $explicit) {
-            $old = MoneyAudit::values($tx);
+        return DB::transaction(
+            function () use ($tx, $values, $explicit) {
+                $old = MoneyAudit::values($tx);
 
-            $target = $values['status'];
-            unset($values['status']);
+                $target = $values['status'];
+                unset($values['status']);
 
-            $tx->fill($values);
+                $tx->fill($values);
 
-            // Preview the complete final state before writing anything.
-            $preview = MoneyAudit::values($tx);
-            $preview['status'] = $target;
+                // Preview the complete final state before writing anything.
+                $preview = MoneyAudit::values($tx);
+                $preview['status'] = $target;
 
-            $changed = EditPolicy::hasRealChange(
-                $old,
-                $preview,
-            );
+                $changed = EditPolicy::hasRealChange(
+                    $old,
+                    $preview,
+                );
 
-            if (!$changed) {
+                if (! $changed) {
+                    return $tx->refresh();
+                }
+
+                $tx->save();
+
+                MoneyAudit::record(
+                    'updated',
+                    $tx,
+                    $old,
+                    MoneyAudit::values($tx),
+                );
+
+                $explicit
+                    ? $this->moveTo(
+                        $tx,
+                        $target,
+                        explicit: true,
+                    )
+                    : $this->followMoney($tx);
+
                 return $tx->refresh();
             }
-
-
-            $tx->save();
-
-            MoneyAudit::record(
-                'updated',
-                $tx,
-                $old,
-                MoneyAudit::values($tx),
-            );
-
-            $explicit
-                ? $this->moveTo(
-                    $tx,
-                    $target,
-                    explicit: true,
-                )
-                : $this->followMoney($tx);
-
-            return $tx->refresh();
-        }
-    );
-}
+        );
+    }
 
     /** The quick status change on the card. */
     public function changeStatus(ManagerTransaction $tx, string $status): ManagerTransaction
@@ -208,7 +211,7 @@ final class TransactionService
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if (!$locked->trashed()) {
+            if (! $locked->trashed()) {
                 return $locked;
             }
 
@@ -299,7 +302,7 @@ final class TransactionService
             }
 
             // Same lock order as financial record creation: Business -> Transaction -> Payment.
-            \App\Models\Business::query()
+            Business::query()
                 ->whereKey($businessId)
                 ->lockForUpdate()
                 ->firstOrFail();
@@ -315,7 +318,7 @@ final class TransactionService
                 ->firstOrFail();
 
             if ((int) $originalPayment->transaction_id !== (int) $lockedTx->getKey()) {
-                throw (new \Illuminate\Database\Eloquent\ModelNotFoundException())
+                throw (new ModelNotFoundException)
                     ->setModel(BdtPayment::class);
             }
 
@@ -427,21 +430,21 @@ final class TransactionService
         }
 
         BdtPayment::query()->whereKey($removed->modelKeys())->delete();
-        MoneyAudit::record('payments_removed', $tx, [], [], ['reason' => $reason, 'payments' => $removed->map(fn($p) => ['id' => $p->uuid, 'amount_bdt' => $p->amount_bdt])->all()]);
+        MoneyAudit::record('payments_removed', $tx, [], [], ['reason' => $reason, 'payments' => $removed->map(fn ($p) => ['id' => $p->uuid, 'amount_bdt' => $p->amount_bdt])->all()]);
         $this->recalculatePaid($tx);
     }
 
     private function insertPayment(ManagerTransaction $tx, string $amount, string $paidOn, bool $auto, ?int $reverses, ?string $note, ?string $id): BdtPayment
     {
         return BdtPayment::create([
-            'uuid'                => RecordId::make($id),
-            'user_id'             => $this->current->userId(),
-            'transaction_id'      => $tx->id,
-            'amount_bdt'          => $amount,
-            'paid_on'             => $paidOn,
-            'auto'                => $auto,
+            'uuid' => RecordId::make($id),
+            'user_id' => $this->current->userId(),
+            'transaction_id' => $tx->id,
+            'amount_bdt' => $amount,
+            'paid_on' => $paidOn,
+            'auto' => $auto,
             'reverses_payment_id' => $reverses,
-            'note'                => $note,
+            'note' => $note,
         ]);
     }
 
@@ -457,43 +460,43 @@ final class TransactionService
     /** Validates the FINAL record and returns the columns to store, with the server's calculation. */
     private function checked(array $input, ?ManagerTransaction $stored): array
     {
-        $pick = fn(string $k) => array_key_exists($k, $input) ? $input[$k] : $stored?->{ $k};
+        $pick = fn (string $k) => array_key_exists($k, $input) ? $input[$k] : $stored?->{ $k};
         $errors = [];
 
         // customer
         $customer = $stored?->customer;
-        if (array_key_exists('customer_id', $input) || !$stored) {
+        if (array_key_exists('customer_id', $input) || ! $stored) {
             $customer = is_string($input['customer_id'] ?? null) ? Customer::query()
                 ->where('uuid', $input['customer_id'])
                 ->where(fn ($q) => $q->where('archived', false)
                     ->orWhere('id', $stored?->customer_id ?? 0))
                 ->first() : null;
-            if (!$customer) {
+            if (! $customer) {
                 $errors['customer_id'] = ['customer_required', 'Select a customer first.'];
             }
         }
 
         $method = $pick('receive_method');
-        if (!in_array($method, O::RECEIVE_METHODS, true)) {
+        if (! in_array($method, O::RECEIVE_METHODS, true)) {
             $errors['receive_method'] = ['receive_method_invalid', 'Choose how the money is paid: Bkash, Nagad, Rocket, Bank, Cash or Other Payment Method.'];
         }
         $status = $pick('status');
-        if (!in_array($status, O::STATUSES, true)) {
+        if (! in_array($status, O::STATUSES, true)) {
             $errors['status'] = ['status_invalid', 'Choose a status: customer has not paid, money received, or taka sent.'];
         }
         $currency = $pick('currency');
-        if (!in_array($currency, \App\Support\Sender\SenderOptions::CURRENCIES, true)) {
+        if (! in_array($currency, SenderOptions::CURRENCIES, true)) {
             $errors['currency'] = ['currency_invalid', 'Choose a currency from the list.'];
         }
 
-        $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
+        $limitsCurrency = CurrencyRules::supported($currency) ? $currency : 'FJD';
         $rate = $pick('rate');
-        if ($stored && !array_key_exists('rate', $input)) {
-            $rate = \App\Support\Money\CurrencyRules::storedRate($rate, $limitsCurrency);
+        if ($stored && ! array_key_exists('rate', $input)) {
+            $rate = CurrencyRules::storedRate($rate, $limitsCurrency);
         }
         foreach ([
-            ['amount', 'an amount', \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), 2],
-            ['rate', 'an exchange rate', \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)],
+            ['amount', 'an amount', CurrencyRules::amountMax($limitsCurrency), 2],
+            ['rate', 'an exchange rate', CurrencyRules::rateMax($limitsCurrency), CurrencyRules::rateDecimals($limitsCurrency)],
         ] as [$f, $label, $max, $decimals]) {
             if ($e = MoneyField::check($f === 'rate' ? $rate : $pick($f), $f, $label, $max, decimals: $decimals)) {
                 $errors[$f] = $e;
@@ -509,27 +512,39 @@ final class TransactionService
         $withdrawal = $wallet ? $pick('withdrawal_charge') : 0;
         $sending = $wallet ? $pick('sending_number') : null;
 
-        if (!isset($errors['amount']) && !isset($errors['commission'])) {
+        if (! isset($errors['amount']) && ! isset($errors['commission'])) {
             $max = Dec::percentOf(Dec::of($pick('amount')), O::COMMISSION_MAX_PERCENT);
             if (bccomp(Dec::of($pick('commission')), $max, 8) > 0) {
-                $errors['commission'] = ['commission_too_high', 'Commission cannot be more than 20% of the amount (' . Dec::round($max) . ' ' . $currency . ').'];
+                $errors['commission'] = ['commission_too_high', 'Commission cannot be more than 20% of the amount ('.Dec::round($max).' '.$currency.').'];
             }
         }
 
+        // Validate client-supplied BDT before comparing with the server calculation.
+        if (
+            array_key_exists('obligation_bdt', $input)
+            && $input['obligation_bdt'] !== null
+            && $input['obligation_bdt'] !== ''
+            && ! FinancialNumber::isValid($input['obligation_bdt'], 2)
+        ) {
+            $errors['obligation_bdt'] = [
+                'obligation_bdt_invalid',
+                'Enter a valid BDT amount (maximum 2 decimals).',
+            ];
+        }
         $calc = null;
-        if (!isset($errors['amount']) && !isset($errors['rate']) && !isset($errors['receive_method'])) {
+        if (! isset($errors['amount']) && ! isset($errors['rate']) && ! isset($errors['receive_method'])) {
             $calc = ManagerCalculator::transaction($pick('amount'), $rate, $method, isset($errors['withdrawal_charge']) ? 0 : $withdrawal, isset($errors['commission']) ? 0 : $pick('commission'));
-            if ($wallet && !isset($errors['withdrawal_charge'])) {
+            if ($wallet && ! isset($errors['withdrawal_charge'])) {
                 $max = Dec::percentOf($calc['base_bdt'], O::WITHDRAWAL_MAX_PERCENT);
                 if (bccomp(Dec::of($withdrawal), $max, 8) > 0) {
-                    $errors['withdrawal_charge'] = ['withdrawal_too_high', 'Withdrawal charge cannot be more than 20% of the converted taka (' . Dec::round($max) . ' BDT).'];
+                    $errors['withdrawal_charge'] = ['withdrawal_too_high', 'Withdrawal charge cannot be more than 20% of the converted taka ('.Dec::round($max).' BDT).'];
                 }
             }
             if (bccomp($calc['obligation_bdt'], O::BDT_MAX, 2) > 0) {
                 $errors['amount'] = ['result_out_of_range', 'The taka to send must be at most 1,000,000,000 BDT.'];
             }
             // the app's own calculation must match the server's
-            if (isset($input['obligation_bdt']) && $input['obligation_bdt'] !== '' && bccomp(Dec::of($input['obligation_bdt']), $calc['obligation_bdt'], 2) !== 0) {
+            if (! isset($errors['obligation_bdt']) && isset($input['obligation_bdt']) && $input['obligation_bdt'] !== '' && bccomp(Dec::of($input['obligation_bdt']), $calc['obligation_bdt'], 2) !== 0) {
                 $errors['obligation_bdt'] = ['calc_mismatch', "The taka to send should be {$calc['obligation_bdt']} BDT. Please update the app."];
             }
         }
@@ -539,7 +554,7 @@ final class TransactionService
         }
 
         [$payTo, $bank] = [null, null];
-        if ($customer && is_string($method) && !isset($errors['receive_method'])) {
+        if ($customer && is_string($method) && ! isset($errors['receive_method'])) {
             [$payTo, $bank, $payError] = $this->payTarget($customer, $method, $input, $stored);
             if ($payError) {
                 $errors['pay_to'] = $payError;
@@ -548,16 +563,16 @@ final class TransactionService
 
         $destinationHash = null;
 
-        if (!isset($errors['pay_to']) && is_string($method)) {
+        if (! isset($errors['pay_to']) && is_string($method)) {
             $destinationHash = match ($method) {
-                'Bkash'  => is_string($payTo)
+                'Bkash' => is_string($payTo)
                 ? $this->identifierHasher->hash(
                     'wallet_bkash',
                     IdentifierNormalizer::wallet($payTo)
                 )
                 : null,
 
-                'Nagad'  => is_string($payTo)
+                'Nagad' => is_string($payTo)
                 ? $this->identifierHasher->hash(
                     'wallet_nagad',
                     IdentifierNormalizer::wallet($payTo)
@@ -571,7 +586,7 @@ final class TransactionService
                 )
                 : null,
 
-                'Bank'   => is_string($bank['account_number'] ?? null)
+                'Bank' => is_string($bank['account_number'] ?? null)
                 ? $this->identifierHasher->hash(
                     'bank_account',
                     IdentifierNormalizer::bankAccount(
@@ -580,14 +595,14 @@ final class TransactionService
                 )
                 : null,
 
-                default  => null,
+                default => null,
             };
         }
 
         // date and time: UTC plus the timezone it was entered in
         $when = $stored?->occurred_at;
         $zone = $stored?->timezone ?? $this->timezone();
-        if (array_key_exists('occurred_at', $input) || !$stored) {
+        if (array_key_exists('occurred_at', $input) || ! $stored) {
             [$when, $zone, $e] = RecordTime::parse($input['occurred_at'] ?? null, $input['timezone'] ?? null, $this->timezone());
             if ($e) {
                 $errors[$e[0] === 'timezone_invalid' ? 'timezone' : 'occurred_at'] = $e;
@@ -599,23 +614,23 @@ final class TransactionService
         }
 
         return [
-            'customer_id'       => $customer->id,
-            'customer_name'     => $customer->name,
-            'currency'          => $currency,
-            'amount'            => Dec::of($pick('amount')),
-            'rate'              => Dec::of($rate, \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)),
-            'commission'        => Dec::of($pick('commission')),
-            'receive_method'    => $method,
-            'pay_to'            => $payTo,
-            'destination_hash'  => $destinationHash,
-            'bank'              => $bank,
+            'customer_id' => $customer->id,
+            'customer_name' => $customer->name,
+            'currency' => $currency,
+            'amount' => Dec::of($pick('amount')),
+            'rate' => Dec::of($rate, CurrencyRules::rateDecimals($limitsCurrency)),
+            'commission' => Dec::of($pick('commission')),
+            'receive_method' => $method,
+            'pay_to' => $payTo,
+            'destination_hash' => $destinationHash,
+            'bank' => $bank,
             'withdrawal_charge' => $calc['withdrawal_charge'],
-            'sending_number'    => $sending ?: null,
-            'status'            => $status,
-            'base_bdt'          => $calc['base_bdt'],
-            'obligation_bdt'    => $calc['obligation_bdt'],
-            'occurred_at'       => $when,
-            'timezone'          => $zone,
+            'sending_number' => $sending ?: null,
+            'status' => $status,
+            'base_bdt' => $calc['base_bdt'],
+            'obligation_bdt' => $calc['obligation_bdt'],
+            'occurred_at' => $when,
+            'timezone' => $zone,
         ];
     }
 
@@ -628,7 +643,7 @@ final class TransactionService
 
         $same = $stored && $stored->receive_method === $method && (int) $stored->customer_id === (int) $customer->id;
 
-        if ($same && !array_key_exists('pay_to', $input)) {
+        if ($same && ! array_key_exists('pay_to', $input)) {
             return [$stored->pay_to, $stored->bank, null];
         }
 
@@ -656,7 +671,7 @@ final class TransactionService
             return [$stored->pay_to, null, null];
         }
         $saved = $customer->walletNumbers($method);
-        if (!$saved) {
+        if (! $saved) {
             return [null, null, ['pay_to_none_saved', "No {$label} number saved. Edit the customer and add a {$label} number."]];
         }
 
