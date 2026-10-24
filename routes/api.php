@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\V1\Platform\PaymentProviderSettingController as Pla
 use App\Http\Controllers\Api\V1\Platform\PlanPaymentController as PlatformPlanPaymentController;
 use App\Http\Controllers\Api\V1\Platform\SupportVerificationController as PlatformSupportVerificationController;
 use App\Http\Controllers\Api\V1\Reports\ReportController;
+use App\Http\Controllers\Api\V1\Reports\CsvExportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
 use App\Http\Controllers\Api\V1\Sender\RecipientController;
 use App\Http\Controllers\Api\V1\Sender\RemittanceController as SenderRemittanceController;
@@ -217,6 +218,10 @@ Route::prefix('v1')->group(function () {
             Route::patch('/spending/{id}', 'updateSpending');
             Route::delete('/spending/{id}', 'deleteSpending');
         });
+
+        // ---- CSV downloads (Unlimited only, verified by the controller)
+        Route::get('/reports/sender/csv', [CsvExportController::class, 'sender']);
+        Route::get('/reports/manager/csv', [CsvExportController::class, 'manager']);
 
         // ---- reports (business timezone; deleted records never counted)
         Route::controller(ReportController::class)->prefix('reports')->group(function () {
