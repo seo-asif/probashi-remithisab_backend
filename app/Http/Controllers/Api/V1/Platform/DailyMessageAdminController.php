@@ -61,7 +61,64 @@ final class DailyMessageAdminController extends Controller
         return ApiResponse::success(null, 'Message deleted.');
     }
 
+    public function preview(Request $request): JsonResponse
+    {
+        $rows = $this->parseCsv($request);
+        $existing = DailyMessage::query()->whereIn('code', array_keys($rows))
+            ->pluck('code')->all();
+        $existingCodes = array_fill_keys($existing, true);
+
+        return ApiResponse::success([
+            'total' => count($rows),
+            'create' => count($rows) - count($existing),
+            'update' => count($existing),
+            'rows' => array_values(array_map(fn (array $row) => [
+                ...$row,
+                'action' => isset($existingCodes[$row['code']]) ? 'update' : 'create',
+            ], $rows)),
+        ]);
+    }
+
+    public function bulkStatus(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:100'],
+            'ids.*' => ['required', 'uuid', 'distinct'],
+            'status' => ['required', Rule::in(['draft', 'published'])],
+        ]);
+
+        $ids = $data['ids'];
+        $updated = DB::transaction(function () use ($ids, $data): int {
+            $query = DailyMessage::query()->whereIn('uuid', $ids);
+            if ($query->count() !== count($ids)) {
+                throw ValidationException::withMessages([
+                    'ids' => 'One or more messages do not exist.',
+                ]);
+            }
+
+            return $query->update(['status' => $data['status']]);
+        });
+
+        return ApiResponse::success(['updated' => $updated, 'status' => $data['status']]);
+    }
+
     public function import(Request $request): JsonResponse
+    {
+        $rows = $this->parseCsv($request);
+        DB::transaction(function () use ($rows): void {
+            foreach ($rows as $row) {
+                $message = DailyMessage::firstOrNew(['code' => $row['code']]);
+                if (!$message->exists) {
+                    $message->uuid = (string) Str::uuid();
+                }
+                $message->fill($row)->save();
+            }
+        });
+
+        return ApiResponse::success(['imported' => count($rows)], 'CSV imported.');
+    }
+
+    private function parseCsv(Request $request): array
     {
         $request->validate(['file' => ['required', 'file', 'mimes:csv,txt', 'max:1024']]);
         $handle = fopen($request->file('file')->getRealPath(), 'rb');
@@ -104,16 +161,7 @@ final class DailyMessageAdminController extends Controller
                 }
                 $rows[$row['code']] = $row;
             }
-            DB::transaction(function () use ($rows): void {
-                foreach ($rows as $row) {
-                    $message = DailyMessage::firstOrNew(['code' => $row['code']]);
-                    if (!$message->exists) {
-                        $message->uuid = (string) Str::uuid();
-                    }
-                    $message->fill($row)->save();
-                }
-            });
-            return ApiResponse::success(['imported' => count($rows)], 'CSV imported.');
+            return $rows;
         } finally {
             fclose($handle);
         }
