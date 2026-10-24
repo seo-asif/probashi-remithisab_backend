@@ -19,26 +19,35 @@ final class PdfExportService
         $generate = function () use ($mode, $period, $business): Response {
             $clock = BusinessClock::for($business);
             $summary = $mode === 'sender'
-                ? (new SenderReport($clock))->totals($period)
-                : (new ManagerReport($clock))->totals($period);
+            ? (new SenderReport($clock))->totals($period)
+            : (new ManagerReport($clock))->totals($period);
 
             $pdf = Pdf::loadView('reports.export', [
-                'mode' => $mode,
+                'mode'    => $mode,
                 'summary' => $summary,
-                'period' => $period,
+                'period'  => $period,
             ])->setPaper('a4', 'portrait');
 
-            return $pdf->download("probashi-{$mode}-{$period->period}.pdf", [
-                'Cache-Control' => 'private, no-store, no-cache, must-revalidate',
-                'Pragma' => 'no-cache',
-                'X-Content-Type-Options' => 'nosniff',
-            ]);
+            $response = $pdf->download(
+                "probashi-{$mode}-{$period->period}.pdf"
+            );
+
+            $response->headers->set(
+                'Cache-Control',
+                'private, no-store, no-cache, must-revalidate'
+            );
+
+            $response->headers->set('Pragma', 'no-cache');
+            $response->headers->set('X-Content-Type-Options', 'nosniff');
+
+            return $response;
+
         };
 
         // Render before the middleware clears CurrentBusiness, and always
         // restore the trusted user scope for sender reports.
         return $mode === 'sender'
-            ? $current->runAsUser($business, $userId, $generate)
-            : $current->runAs($business, $generate);
+        ? $current->runAsUser($business, $userId, $generate)
+        : $current->runAs($business, $generate);
     }
 }
