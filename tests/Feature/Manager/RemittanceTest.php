@@ -19,7 +19,7 @@ class RemittanceTest extends TestCase
 
     public function test_m14_incentive_and_one_rounding(): void
     {
-        $r = $this->remittance();   // 1,000 FJD, rate 51.55, Bank, 2.5%
+        $r = $this->remittance(); // 1,000 FJD, rate 51.55, Bank, 2.5%
         $this->assertSame('52838.75', $r['remit_bdt']);
         $this->assertSame('1288.75', $r['incentive_bdt']);
         $this->assertSame('52.84', $r['effective_rate']);
@@ -75,6 +75,58 @@ class RemittanceTest extends TestCase
             ->assertStatus(422)->assertJsonPath('error_codes.remit_bdt.0', 'calc_mismatch');
         $this->postJson('/api/v1/manager-remittances', [...$base, 'amount' => '10000000', 'rate' => '400'])
             ->assertStatus(422)->assertJsonPath('error_codes.amount.0', 'amount_too_large');
+    }
+
+    public function test_bank_remit_bdt_rejects_invalid_client_values(): void
+    {
+        $base = [
+            'method' => 'Bank',
+            'currency' => 'FJD',
+            'amount' => '100',
+            'rate' => '55',
+            'occurred_at' => '2026-09-16 09:00',
+        ];
+
+        foreach (['5500.004', 'abc', '-5500.00'] as $invalid) {
+            $this->postJson('/api/v1/manager-remittances', [
+                ...$base,
+                'remit_bdt' => $invalid,
+            ])->assertStatus(422)
+                ->assertJsonPath('error_codes.remit_bdt.0', 'remit_bdt_invalid');
+        }
+
+        $this->postJson('/api/v1/manager-remittances', [
+            ...$base,
+            'remit_bdt' => '5500.00',
+        ])->assertCreated()
+            ->assertJsonPath('data.remit_bdt', '5500.00');
+    }
+
+    public function test_bank_remit_bdt_validation_on_update(): void
+    {
+        $r = $this->remittance([
+            'incentive' => false,
+        ]);
+
+        $url = "/api/v1/manager-remittances/{$r['id']}";
+
+        foreach (['5500.004', 'abc', '-5500.00'] as $invalid) {
+            $this->patchJson($url, [
+                'remit_bdt' => $invalid,
+            ])->assertStatus(422)
+                ->assertJsonPath(
+                    'error_codes.remit_bdt.0',
+                    'remit_bdt_invalid'
+                );
+        }
+
+        $this->patchJson($url, [
+            'remit_bdt' => $r['remit_bdt'],
+        ])->assertOk()
+            ->assertJsonPath(
+                'data.remit_bdt',
+                $r['remit_bdt']
+            );
     }
 
     public function test_edits_are_checked_as_a_whole_and_logged(): void

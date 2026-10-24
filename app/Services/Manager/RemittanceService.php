@@ -5,6 +5,7 @@ namespace App\Services\Manager;
 use App\Models\ManagerRemittance;
 use App\Support\Manager\ManagerCalculator;
 use App\Support\Manager\ManagerOptions as O;
+use App\Support\Money\CurrencyRules;
 use App\Support\Money\Dec;
 use App\Support\Money\FinancialNumber;
 use App\Support\Money\MoneyField;
@@ -23,10 +24,9 @@ use Illuminate\Support\Facades\DB;
  */
 final class RemittanceService
 {
-   public function __construct(
-    private CurrentBusiness $current,
-) {
-}
+    public function __construct(
+        private CurrentBusiness $current,
+    ) {}
 
     /** @return array{0: ManagerRemittance, 1: bool} */
     public function create(array $input): array
@@ -58,38 +58,38 @@ final class RemittanceService
     }
 
     public function update(
-    ManagerRemittance $r,
-    array $input,
-): ManagerRemittance {
-    $values = $this->checked($input, $r);
+        ManagerRemittance $r,
+        array $input,
+    ): ManagerRemittance {
+        $values = $this->checked($input, $r);
 
-    return DB::transaction(function () use ($r, $values) {
-        $old = MoneyAudit::values($r);
+        return DB::transaction(function () use ($r, $values) {
+            $old = MoneyAudit::values($r);
 
-        $r->fill($values);
+            $r->fill($values);
 
-        $changed = EditPolicy::hasRealChange(
-            $old,
-            MoneyAudit::values($r),
-        );
+            $changed = EditPolicy::hasRealChange(
+                $old,
+                MoneyAudit::values($r),
+            );
 
-        if (!$changed) {
+            if (! $changed) {
+                return $r->refresh();
+            }
+
+            $r->save();
+
+            MoneyAudit::record(
+                'updated',
+                $r,
+                $old,
+                MoneyAudit::values($r),
+            );
+
             return $r->refresh();
-        }
+        });
+    }
 
-
-        $r->save();
-
-        MoneyAudit::record(
-            'updated',
-            $r,
-            $old,
-            MoneyAudit::values($r),
-        );
-
-        return $r->refresh();
-    });
-}
     public function delete(ManagerRemittance $r): void
     {
         DB::transaction(function () use ($r) {
@@ -112,26 +112,26 @@ final class RemittanceService
 
     private function checked(array $input, ?ManagerRemittance $stored): array
     {
-        $pick   = fn (string $k, mixed $d = null) => array_key_exists($k, $input) ? $input[$k] : ($stored?->{$k} ?? $d);
+        $pick = fn (string $k, mixed $d = null) => array_key_exists($k, $input) ? $input[$k] : ($stored?->{ $k} ?? $d);
         $errors = [];
 
         // v1.1.290 creates only Bank remittances. Existing legacy methods remain
         // readable and editable without forcing historical records to change.
         $method = $pick('method', 'Bank');
-        if (!in_array($method, O::REMIT_METHODS, true)) {
+        if (! in_array($method, O::REMIT_METHODS, true)) {
             $errors['method'] = ['method_invalid', 'Choose a valid remittance method.'];
         } elseif ($method !== 'Bank' && ($stored === null || $stored->method !== $method)) {
             $errors['method'] = ['bank_only', 'New remittances must use Bank. Existing legacy methods may be edited but not selected for a new record.'];
         }
         $currency = $pick('currency');
-        if (!in_array($currency, SenderOptions::CURRENCIES, true)) {
+        if (! in_array($currency, SenderOptions::CURRENCIES, true)) {
             $errors['currency'] = ['currency_invalid', 'Choose a currency from the list.'];
         }
 
-        $other      = $method === O::OTHER;
+        $other = $method === O::OTHER;
         $chargeType = $pick('charge_type', O::CHARGE_EXCLUDED);
-        $incentive  = (bool) $pick('incentive', false);
-        $typed      = null;
+        $incentive = (bool) $pick('incentive', false);
+        $typed = null;
 
         if ($other) {
             // only a typed BDT total; switching an existing record to Other needs a newly typed total
@@ -143,24 +143,24 @@ final class RemittanceService
         } else {
             [$amount, $rate, $charge, $pct] = [$pick('amount'), $pick('rate'), $pick('charge'), $incentive ? $pick('incentive_pct') : '0'];
 
-            $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
-            if ($stored && !array_key_exists('rate', $input)) {
-                $rate = \App\Support\Money\CurrencyRules::storedRate($rate, $limitsCurrency);
+            $limitsCurrency = CurrencyRules::supported($currency) ? $currency : 'FJD';
+            if ($stored && ! array_key_exists('rate', $input)) {
+                $rate = CurrencyRules::storedRate($rate, $limitsCurrency);
             }
             foreach ([
-                ['amount', 'an amount', \App\Support\Money\CurrencyRules::amountMax($limitsCurrency), $amount, 2],
-                ['rate', 'an exchange rate', \App\Support\Money\CurrencyRules::rateMax($limitsCurrency), $rate, \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)],
+                ['amount', 'an amount', CurrencyRules::amountMax($limitsCurrency), $amount, 2],
+                ['rate', 'an exchange rate', CurrencyRules::rateMax($limitsCurrency), $rate, CurrencyRules::rateDecimals($limitsCurrency)],
             ] as [$f, $label, $max, $v, $decimals]) {
                 if ($e = MoneyField::check($v, $f, $label, $max, decimals: $decimals)) {
                     $errors[$f] = $e;
                 }
             }
-            if (!in_array($chargeType, O::CHARGE_TYPES, true)) {
+            if (! in_array($chargeType, O::CHARGE_TYPES, true)) {
                 $errors['charge_type'] = ['charge_type_invalid', 'Choose whether the charge is included or excluded.'];
             }
             if ($e = MoneyField::check($charge, 'charge', 'a valid charge', O::REMIT_AMOUNT_MAX, required: false, positive: false)) {
                 $errors['charge'] = $e;
-            } elseif (!isset($errors['amount'])) {
+            } elseif (! isset($errors['amount'])) {
                 if (bccomp(Dec::of($charge), Dec::of($amount), 2) > 0) {
                     $errors['charge'] = ['charge_more_than_amount', 'Charge cannot be more than the amount sent.'];
                 } elseif ($chargeType === O::CHARGE_INCLUDED && bccomp(Dec::of($charge), Dec::of($amount), 2) >= 0) {
@@ -168,7 +168,7 @@ final class RemittanceService
                 }
             }
             if ($incentive) {
-                if ($pct === null || $pct === '' || !FinancialNumber::isValid($pct, 2)) {
+                if ($pct === null || $pct === '' || ! FinancialNumber::isValid($pct, 2)) {
                     $errors['incentive_pct'] = ['incentive_invalid', 'Enter a percentage from 0 to 10 (maximum 2 decimals).'];
                 } elseif (bccomp(Dec::of($pct), O::INCENTIVE_MAX, 2) > 0) {
                     $errors['incentive_pct'] = ['incentive_too_high', 'Incentive cannot be more than 10%.'];
@@ -176,21 +176,36 @@ final class RemittanceService
             }
         }
 
+        // Validate client-supplied Bank BDT before comparing calculations.
+        // Do not silently round invalid input.
+        if (
+            ! $other
+            && array_key_exists('remit_bdt', $input)
+            && $input['remit_bdt'] !== null
+            && $input['remit_bdt'] !== ''
+            && ! FinancialNumber::isValid($input['remit_bdt'], 2)
+        ) {
+            $errors['remit_bdt'] = [
+                'remit_bdt_invalid',
+                'Enter a valid BDT amount (maximum 2 decimals).',
+            ];
+        }
+
         $calc = null;
-        if (!$errors) {
+        if (! $errors) {
             $calc = ManagerCalculator::remittance($method, $amount, $rate, $charge, $chargeType, $incentive, $pct, $typed);
             if (bccomp($calc['remit_bdt'], '0', 2) <= 0) {
                 $errors['amount'] = ['result_out_of_range', 'The calculated BDT must be more than 0.'];
             } elseif (bccomp($calc['remit_bdt'], O::BDT_MAX, 2) > 0) {
                 $errors[$other ? 'remit_bdt' : 'amount'] = ['result_out_of_range', 'The calculated BDT exceeds the safety limit of 1,000,000,000 BDT.'];
-            } elseif (!$other && isset($input['remit_bdt']) && $input['remit_bdt'] !== '' && bccomp(Dec::of($input['remit_bdt']), $calc['remit_bdt'], 2) !== 0) {
+            } elseif (! $other && isset($input['remit_bdt']) && $input['remit_bdt'] !== '' && bccomp(Dec::of($input['remit_bdt']), $calc['remit_bdt'], 2) !== 0) {
                 $errors['remit_bdt'] = ['calc_mismatch', "The BDT should be {$calc['remit_bdt']}. Please update the app."];
             }
         }
 
         $when = $stored?->occurred_at;
         $zone = $stored?->timezone ?? $this->current->get()->timezone;
-        if (array_key_exists('occurred_at', $input) || !$stored) {
+        if (array_key_exists('occurred_at', $input) || ! $stored) {
             [$when, $zone, $e] = RecordTime::parse($input['occurred_at'] ?? null, $input['timezone'] ?? null, $this->current->get()->timezone);
             if ($e) {
                 $errors[$e[0] === 'timezone_invalid' ? 'timezone' : 'occurred_at'] = $e;
@@ -202,18 +217,18 @@ final class RemittanceService
         }
 
         return [
-            'method'        => $method,
-            'currency'      => $currency,
-            'amount'        => Dec::of($amount),
-            'rate'          => Dec::of($rate, \App\Support\Money\CurrencyRules::rateDecimals(\App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD')),
-            'charge'        => Dec::of($charge),
-            'charge_type'   => $chargeType,
-            'incentive'     => $incentive,
+            'method' => $method,
+            'currency' => $currency,
+            'amount' => Dec::of($amount),
+            'rate' => Dec::of($rate, CurrencyRules::rateDecimals(CurrencyRules::supported($currency) ? $currency : 'FJD')),
+            'charge' => Dec::of($charge),
+            'charge_type' => $chargeType,
+            'incentive' => $incentive,
             'incentive_pct' => Dec::of($pct),
-            'remit_bdt'     => $calc['remit_bdt'],
-            'occurred_at'   => $when,
-            'timezone'      => $zone,
-            'notes'         => $pick('notes'),
+            'remit_bdt' => $calc['remit_bdt'],
+            'occurred_at' => $when,
+            'timezone' => $zone,
+            'notes' => $pick('notes'),
         ];
     }
 }
