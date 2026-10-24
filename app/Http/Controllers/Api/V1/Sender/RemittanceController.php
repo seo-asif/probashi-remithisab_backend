@@ -11,9 +11,12 @@ use App\Models\SenderRemittance;
 use App\Services\Sender\SenderService;
 use App\Support\Api\EditGuard;
 use App\Support\Api\Paging;
+use App\Support\Money\CurrencyRules;
 use App\Support\Money\Dec;
 use App\Support\Reports\ReportPeriod;
+use App\Support\Sender\SenderCalculator;
 use App\Support\Sender\SenderOptions;
+use App\Support\Sender\SenderValidation;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
 use App\Support\Validation\Reject;
@@ -64,6 +67,42 @@ class RemittanceController extends Controller
         $page = Paging::paginate($query->orderByDesc('occurred_at')->orderByDesc('id'), $request);
 
         return ApiResponse::success(Paging::shape($page, fn ($r) => SenderRemittanceResource::make($r)->resolve($request)));
+    }
+
+    public function preview(Request $request): JsonResponse
+    {
+        $currency = is_string($request->input('currency'))
+            ? strtoupper(trim((string) $request->input('currency')))
+            : '';
+
+        if (!CurrencyRules::supported($currency)) {
+            Reject::fail([
+                'currency' => ['currency_invalid', 'Choose a currency from the list.'],
+            ]);
+        }
+
+        $money = [
+            'amount' => $request->input('amount'),
+            'rate' => $request->input('rate'),
+            'charge' => $request->input('charge', '0'),
+            'charge_type' => $request->input('charge_type'),
+            'incentive_pct' => $request->input('incentive_pct', '0'),
+        ];
+
+        if ($errors = SenderValidation::moneyErrors($money, $currency)) {
+            Reject::fail($errors);
+        }
+
+        return ApiResponse::success([
+            'currency' => $currency,
+            ...SenderCalculator::breakdown(
+                $money['amount'],
+                $money['rate'],
+                $money['charge'],
+                (string) $money['charge_type'],
+                $money['incentive_pct'],
+            ),
+        ]);
     }
 
     public function store(SenderRemittanceRequest $request): JsonResponse
