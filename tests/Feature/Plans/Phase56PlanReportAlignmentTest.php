@@ -12,7 +12,7 @@ final class Phase56PlanReportAlignmentTest extends TestCase
 {
     use Phase3Fixtures, RefreshDatabase;
 
-    public function test_free_plan_reports_basic_pdf_entitlement_but_not_enhanced_monthly_pdf(): void
+    public function test_free_plan_reports_monthly_pdf_but_not_custom_dates_or_csv(): void
     {
         $this->actAs($this->makeBusiness(['timezone' => 'Pacific/Fiji']));
 
@@ -20,7 +20,9 @@ final class Phase56PlanReportAlignmentTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.plan.tier', PlanLimits::FREE)
             ->assertJsonPath('data.plan.entitlements.basic_pdf', true)
-            ->assertJsonPath('data.plan.entitlements.monthly_pdf', false);
+            ->assertJsonPath('data.plan.entitlements.monthly_pdf', true)
+            ->assertJsonPath('data.plan.entitlements.custom_date_range', false)
+            ->assertJsonPath('data.plan.entitlements.csv_export', false);
 
         // Basic reports stay readable without forcing a subscription.
         $this->getJson('/api/v1/reports/sender?period=this_month')->assertOk();
@@ -45,6 +47,8 @@ final class Phase56PlanReportAlignmentTest extends TestCase
             ->assertJsonPath('data.plan.tier', PlanLimits::UNLIMITED)
             ->assertJsonPath('data.plan.entitlements.basic_pdf', true)
             ->assertJsonPath('data.plan.entitlements.monthly_pdf', true)
+            ->assertJsonPath('data.plan.entitlements.custom_date_range', true)
+            ->assertJsonPath('data.plan.entitlements.csv_export', true)
             ->assertJsonPath('data.plan.allowances.sender_remittances.limit', null);
 
         $subscription->forceFill([

@@ -36,7 +36,7 @@ class PlanAllowanceResponseTest extends TestCase
             ->assertJsonPath('data.plan.access_source', null)
             ->assertJsonPath(
                 'data.plan.entitlements.monthly_pdf',
-                false,
+                true,
             )
             ->assertJsonPath(
                 'data.plan.allowances.sender_remittances.scope',
@@ -399,7 +399,7 @@ class PlanAllowanceResponseTest extends TestCase
             )
             ->assertJsonPath(
                 'data.plan.entitlements.monthly_pdf',
-                false,
+                true,
             )
             ->assertJsonPath(
                 'data.plan.allowances.sender_remittances.limit',

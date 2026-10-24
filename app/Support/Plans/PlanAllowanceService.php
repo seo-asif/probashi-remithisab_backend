@@ -105,10 +105,12 @@ final class PlanAllowanceService
             ),
 
             'entitlements' => [
-                // Existing monthly_pdf remains the enhanced paid export.
-                // Basic PDFs are available on Free as agreed, too.
+                // v1.1.290: monthly PDF is free; custom report dates and
+                // CSV export are Unlimited features. File creation is separate.
                 'basic_pdf' => true,
-                'monthly_pdf' => $unlimited,
+                'monthly_pdf' => true,
+                'custom_date_range' => $unlimited,
+                'csv_export' => $unlimited,
             ],
 
             'allowances' => [
