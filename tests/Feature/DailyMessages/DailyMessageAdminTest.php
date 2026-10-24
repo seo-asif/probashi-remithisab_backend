@@ -4,6 +4,7 @@ namespace Tests\Feature\DailyMessages;
 
 use App\Enums\BusinessRole;
 use App\Models\DailyMessage;
+use App\Models\PlatformAdmin;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Laravel\Sanctum\Sanctum;
@@ -71,4 +72,28 @@ final class DailyMessageAdminTest extends TestCase
         $this->post(self::URL.'/import', ['file' => $file], ['Accept' => 'application/json'])->assertUnprocessable();
         $this->assertDatabaseCount('daily_messages', 0);
     }
+    private function makeAuthorizedMember(BusinessRole $role): array
+    {
+        $business = $this->makeBusiness();
+        $user = $this->makeMember($business, $role);
+        $user->forceFill([
+            'status' => 'active',
+            'email_verified_at' => now(),
+        ])->save();
+
+        return [$business->refresh(), $user->refresh()];
+    }
+
+    private function actingAsPlatformAdmin(): PlatformAdmin
+    {
+        [, $user] = $this->makeAuthorizedMember(BusinessRole::ReadOnlyStaff);
+        $admin = PlatformAdmin::create([
+            'user_id' => $user->id,
+            'status' => 'active',
+        ]);
+        Sanctum::actingAs($user);
+
+        return $admin;
+    }
+
 }
