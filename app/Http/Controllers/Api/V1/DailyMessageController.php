@@ -27,6 +27,9 @@ final class DailyMessageController extends Controller
 
     public function sync(Request $request): JsonResponse
     {
+        $request->validate([
+            'version' => ['sometimes', 'string', 'regex:/^[a-f0-9]{64}$/i'],
+        ]);
         $messages = $this->published();
         $version = hash('sha256', json_encode($messages, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         $unchanged = hash_equals($version, (string) $request->query('version', ''));
