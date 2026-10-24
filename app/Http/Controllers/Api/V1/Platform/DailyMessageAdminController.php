@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Platform;
 use App\Http\Controllers\Controller;
 use App\Http\Responses\ApiResponse;
 use App\Models\DailyMessage;
+use App\Models\AuditLog;
 use App\Support\DailyMessageCategories;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -66,10 +67,28 @@ final class DailyMessageAdminController extends Controller
         ];
     }
 
+    private function audit(Request $request, string $action, ?DailyMessage $message = null, array $metadata = []): void
+    {
+        AuditLog::create([
+            'actor_user_id' => $request->user()?->id,
+            'action' => 'platform.daily_message.'.$action,
+            'target_type' => 'daily_message',
+            'target_id' => $message?->id,
+            'metadata' => $metadata,
+            'ip' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate($this->rules());
-        return ApiResponse::success(DailyMessage::create($data), 'Message created.', 201);
+        $message = DB::transaction(function () use ($request, $data): DailyMessage {
+            $message = DailyMessage::create($data);
+            $this->audit($request, 'created', $message, ['code' => $message->code, 'category' => $message->category]);
+            return $message;
+        });
+        return ApiResponse::success($message, 'Message created.', 201);
     }
 
     public function update(Request $request, string $id): JsonResponse
@@ -79,13 +98,21 @@ final class DailyMessageAdminController extends Controller
         if ($data === []) {
             throw ValidationException::withMessages(['fields' => 'At least one field is required.']);
         }
-        $message->update($data);
+        DB::transaction(function () use ($request, $message, $data): void {
+            $changed = array_keys(array_filter($data, fn ($value, $key) => $message->{$key} !== $value, ARRAY_FILTER_USE_BOTH));
+            $message->update($data);
+            $this->audit($request, 'updated', $message, ['changed_fields' => $changed]);
+        });
         return ApiResponse::success($message->refresh(), 'Message updated.');
     }
 
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
-        DailyMessage::where('uuid', $id)->firstOrFail()->delete();
+        DB::transaction(function () use ($request, $id): void {
+            $message = DailyMessage::where('uuid', $id)->firstOrFail();
+            $this->audit($request, 'deleted', $message, ['code' => $message->code]);
+            $message->delete();
+        });
         return ApiResponse::success(null, 'Message deleted.');
     }
 
@@ -116,7 +143,7 @@ final class DailyMessageAdminController extends Controller
         ]);
 
         $ids = $data['ids'];
-        $updated = DB::transaction(function () use ($ids, $data): int {
+        $updated = DB::transaction(function () use ($request, $ids, $data): int {
             $query = DailyMessage::query()->whereIn('uuid', $ids);
             if ($query->count() !== count($ids)) {
                 throw ValidationException::withMessages([
@@ -124,7 +151,9 @@ final class DailyMessageAdminController extends Controller
                 ]);
             }
 
-            return $query->update(['status' => $data['status']]);
+            $updated = $query->update(['status' => $data['status']]);
+            $this->audit($request, 'bulk_status', null, ['ids' => $ids, 'status' => $data['status'], 'updated' => $updated]);
+            return $updated;
         });
 
         return ApiResponse::success(['updated' => $updated, 'status' => $data['status']]);
@@ -133,7 +162,7 @@ final class DailyMessageAdminController extends Controller
     public function import(Request $request): JsonResponse
     {
         $rows = $this->parseCsv($request);
-        DB::transaction(function () use ($rows): void {
+        DB::transaction(function () use ($request, $rows): void {
             foreach ($rows as $row) {
                 $message = DailyMessage::firstOrNew(['code' => $row['code']]);
                 if (!$message->exists) {
@@ -141,6 +170,7 @@ final class DailyMessageAdminController extends Controller
                 }
                 $message->fill($row)->save();
             }
+            $this->audit($request, 'imported', null, ['count' => count($rows), 'codes' => array_keys($rows)]);
         });
 
         return ApiResponse::success(['imported' => count($rows)], 'CSV imported.');
@@ -175,6 +205,11 @@ final class DailyMessageAdminController extends Controller
                     throw ValidationException::withMessages(['file' => "Invalid column count on row {$line}."]);
                 }
                 $row = array_combine($headers, array_map('trim', $values));
+                foreach ($row as $field => $value) {
+                    if (str_contains($value, "\\0") || !mb_check_encoding($value, 'UTF-8')) {
+                        throw ValidationException::withMessages(['file' => "Invalid text encoding on row {$line}."]);
+                    }
+                }
                 $validator = validator($row, [
                     'code' => ['required', 'string', 'max:64'],
                     'message_bn' => ['required', 'string', 'max:1000'],
