@@ -3,8 +3,6 @@
 namespace Tests\Feature\Security;
 
 use App\Models\AuditLog;
-use App\Services\Student\StudentService;
-use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -35,31 +33,24 @@ final class Phase57PrivacyBoundaryTest extends TestCase
         $this->assertStringNotContainsString('Sensitive family note', json_encode($audit->metadata));
     }
 
-    public function test_fee_title_is_not_copied_to_audit_metadata(): void
+    public function test_private_student_expense_note_is_not_copied_to_audit_metadata(): void
     {
-        $business = $this->makeBusiness();
-        $user = $this->actAs($business);
+        $this->actAs($this->makeBusiness());
 
-        // Student-fee API writes are retired (HTTP 410). Exercise the legacy
-        // service inside an explicit owner/tenant context to verify redaction.
-        [$fee, $created] = app(CurrentBusiness::class)->runAsUser($business, $user->id, fn () =>
-            app(StudentService::class)->saveFee(null, [
-                'name' => 'Private Student Name',
-                'amount' => '350.00',
-                'currency' => 'FJD',
-                'due_on' => now()->format('Y-m-d'),
-            ])
-        );
-        $this->assertTrue($created);
-        $this->assertSame('Private Student Name', $fee->name);
+        $this->postJson('/api/v1/student/expenses', [
+            'category' => 'education',
+            'amount' => '350.00',
+            'currency' => 'FJD',
+            'note' => 'Sensitive student expense note',
+        ])->assertCreated();
 
         $audit = AuditLog::query()
-            ->where('action', 'student_fee.created')
+            ->where('action', 'student_expense.created')
             ->firstOrFail();
 
-        $this->assertArrayNotHasKey('name', $audit->metadata['new']);
+        $this->assertArrayNotHasKey('note', $audit->metadata['new']);
         $this->assertSame('350.00', $audit->metadata['new']['amount']);
-        $this->assertStringNotContainsString('Private Student Name', json_encode($audit->metadata));
+        $this->assertStringNotContainsString('Sensitive student expense note', json_encode($audit->metadata));
     }
 
     public function test_manager_customer_snapshot_name_is_not_copied_to_audit_metadata(): void

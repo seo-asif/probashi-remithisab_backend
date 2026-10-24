@@ -2,11 +2,9 @@
 
 namespace App\Services\Student;
 
-use App\Exceptions\ApiException;
 use App\Models\Business;
 use App\Models\SenderRecipient;
 use App\Models\StudentExpense;
-use App\Models\StudentFee;
 use App\Models\StudentMoneyIn;
 use App\Models\StudentOpeningBalance;
 use App\Models\StudentSetting;
@@ -135,47 +133,12 @@ final class StudentService
 
     private function saveExpenseUnserialized(?StudentExpense $expense, array $input): array
     {
-        if ($expense !== null && $expense->student_fee_id !== null) {
-            throw new ApiException('STUDENT_FEE_LINKED', 'Manage this expense from its fee.', 409);
-        }
-
         if ($expense === null && ($existing = RecordId::existing(StudentExpense::class, $input['id'] ?? null))) {
             return [$existing, false];
         }
 
         $values = $this->expenseValues($input, $expense);
         return $this->persist($expense ?? new StudentExpense(['uuid' => RecordId::make($input['id'] ?? null)]), $values);
-    }
-
-    /** @return array{0: StudentFee, 1: bool} */
-    public function saveFee(?StudentFee $fee, array $input): array
-    {
-        if ($fee !== null) {
-            return $this->saveFeeUnserialized($fee, $input);
-        }
-
-        return RecordId::withinCreationLock(
-            StudentFee::class,
-            $input['id'] ?? null,
-            fn (): array => $this->saveFeeUnserialized(null, $input),
-        );
-    }
-
-    private function saveFeeUnserialized(?StudentFee $fee, array $input): array
-    {
-        if ($fee === null && ($existing = RecordId::existing(StudentFee::class, $input['id'] ?? null))) {
-            return [$existing, false];
-        }
-
-        $values = $this->feeValues($input, $fee);
-        if ($fee !== null && $fee->paid_on !== null &&
-            (bccomp($values['amount'], Dec::of($fee->amount), 2) !== 0 ||
-                $values['currency'] !== $fee->currency)
-        ) {
-            throw new ApiException('STUDENT_FEE_PAID', 'Unmark the fee as paid before changing its amount or currency.', 409);
-        }
-
-        return $this->persist($fee ?? new StudentFee(['uuid' => RecordId::make($input['id'] ?? null)]), $values);
     }
 
     public function deleteMoneyIn(StudentMoneyIn $receipt): void
@@ -185,10 +148,6 @@ final class StudentService
 
     public function deleteExpense(StudentExpense $expense): void
     {
-        if ($expense->student_fee_id !== null) {
-            throw new ApiException('STUDENT_FEE_LINKED', 'Manage this expense from its fee.', 409);
-        }
-
         $this->softDelete($expense);
     }
 
@@ -199,124 +158,7 @@ final class StudentService
 
     public function restoreExpense(StudentExpense $expense): StudentExpense
     {
-        if ($expense->student_fee_id !== null) {
-            throw new ApiException('STUDENT_FEE_LINKED', 'Manage this expense from its fee.', 409);
-        }
-
         return $this->restoreSimple($expense);
-    }
-
-    public function markFeePaid(StudentFee $fee, ?string $paidOn = null): StudentFee
-    {
-        $paidOn ??= $this->today();
-        $this->checkDate($paidOn, 'paid_on');
-
-        return DB::transaction(function () use ($fee, $paidOn): StudentFee {
-            $locked = StudentFee::query()->whereKey($fee->getKey())->lockForUpdate()->firstOrFail();
-
-            if ($locked->paid_on !== null) {
-                return $locked;
-            }
-
-            $expense = StudentExpense::query()->withTrashed()
-                ->where('student_fee_id', $locked->id)->lockForUpdate()->first();
-
-            $fields = [
-                'student_fee_id' => $locked->id,
-                'category' => 'education',
-                'amount' => Dec::of($locked->amount),
-                'currency' => $locked->currency,
-                'spent_on' => $paidOn,
-                'note' => null,
-            ];
-
-            if ($expense === null) {
-                $expense = StudentExpense::create([
-                    ...$fields,
-                    'uuid' => RecordId::make(null),
-                ]);
-                MoneyAudit::record('created', $expense, [], MoneyAudit::values($expense));
-            } else {
-                $previous = MoneyAudit::values($expense);
-                $expense->fill($fields);
-                if ($expense->trashed()) {
-                    $expense->restore();
-                    MoneyAudit::record('restored', $expense, $previous, MoneyAudit::values($expense));
-                } else {
-                    $expense->save();
-                }
-            }
-
-            $old = MoneyAudit::values($locked);
-            $locked->paid_on = $paidOn;
-            $locked->save();
-            MoneyAudit::record('updated', $locked, $old, MoneyAudit::values($locked));
-
-            return $locked->refresh();
-        });
-    }
-
-    public function unmarkFeePaid(StudentFee $fee): StudentFee
-    {
-        return DB::transaction(function () use ($fee): StudentFee {
-            $locked = StudentFee::query()->whereKey($fee->getKey())->lockForUpdate()->firstOrFail();
-            if ($locked->paid_on === null) {
-                return $locked;
-            }
-
-            $expense = StudentExpense::query()->where('student_fee_id', $locked->id)
-                ->lockForUpdate()->first();
-
-            if ($expense) {
-                $this->softDelete($expense);
-            }
-
-            $old = MoneyAudit::values($locked);
-            $locked->paid_on = null;
-            $locked->save();
-            MoneyAudit::record('updated', $locked, $old, MoneyAudit::values($locked));
-
-            return $locked->refresh();
-        });
-    }
-
-    public function deleteFee(StudentFee $fee): void
-    {
-        DB::transaction(function () use ($fee): void {
-            $locked = StudentFee::query()->whereKey($fee->getKey())->lockForUpdate()->firstOrFail();
-            $expense = StudentExpense::query()->where('student_fee_id', $locked->id)->first();
-            if ($expense !== null) {
-                $this->softDelete($expense);
-            }
-            $this->softDelete($locked);
-        });
-    }
-
-    public function restoreFee(StudentFee $fee): StudentFee
-    {
-        return DB::transaction(function () use ($fee): StudentFee {
-            $locked = StudentFee::query()->withTrashed()->whereKey($fee->getKey())
-                ->lockForUpdate()->firstOrFail();
-
-            if (!$locked->trashed()) {
-                return $locked;
-            }
-
-            $locked->restore();
-            MoneyAudit::record('restored', $locked);
-
-            if ($locked->paid_on !== null) {
-                $expense = StudentExpense::query()->withTrashed()
-                    ->where('student_fee_id', $locked->id)->lockForUpdate()->firstOrFail();
-
-                if ($expense->trashed()) {
-                    $expense->restore();
-                    MoneyAudit::record('restored', $expense);
-                }
-            }
-
-            return $locked->refresh();
-        });
     }
 
     /**
@@ -546,36 +388,9 @@ final class StudentService
         ];
     }
 
-    private function feeValues(array $input, ?StudentFee $stored): array
-    {
-        $v = $this->pick($input, $stored, ['name', 'amount', 'currency', 'due_on']);
-        $errors = [];
-        if (!$this->validPlainName($v['name'], 40)) {
-            $errors['name'] = ['name_invalid', 'Enter a fee name (maximum 40 characters).'];
-        }
-        if ($error = MoneyField::check($v['amount'], 'amount', 'the fee amount', '1000000000')) {
-            $errors['amount'] = $error;
-        }
-        $currency = $this->validateCurrency($v['currency'] ?? $this->business()->default_currency ?? 'FJD', $errors);
-        $date = $v['due_on'];
-        if ($error = RecordTime::date($date, $this->timezone(), allowFuture: true)) {
-            $errors['due_on'] = $error;
-        }
-        if ($errors) {
-            Reject::fail($errors);
-        }
-
-        return [
-            'name' => trim($v['name']),
-            'amount' => Dec::of($v['amount']),
-            'currency' => $currency,
-            'due_on' => $date,
-        ];
-    }
-
     /** @return array{0: \Illuminate\Database\Eloquent\Model, 1: bool} */
     private function persist(
-        StudentMoneyIn|StudentExpense|StudentFee $record,
+        StudentMoneyIn|StudentExpense $record,
         array $values
     ): array {
         return DB::transaction(function () use ($record, $values): array {
@@ -593,7 +408,7 @@ final class StudentService
         });
     }
 
-    private function softDelete(StudentMoneyIn|StudentExpense|StudentFee $record): void
+    private function softDelete(StudentMoneyIn|StudentExpense $record): void
     {
         $old = MoneyAudit::values($record);
         $record->delete();

@@ -5,7 +5,6 @@ namespace App\Models;
 use App\Models\Concerns\HasPublicUuid;
 use App\Support\Tenancy\BelongsToOwner;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class StudentExpense extends Model
@@ -15,7 +14,7 @@ class StudentExpense extends Model
     protected $table = 'student_expenses';
 
     protected $fillable = [
-        'uuid', 'student_fee_id', 'category', 'amount',
+        'uuid', 'category', 'amount',
         'currency', 'spent_on', 'note',
     ];
 
@@ -24,8 +23,4 @@ class StudentExpense extends Model
         return ['spent_on' => 'date:Y-m-d'];
     }
 
-    public function fee(): BelongsTo
-    {
-        return $this->belongsTo(StudentFee::class, 'student_fee_id')->withTrashed();
-    }
 }

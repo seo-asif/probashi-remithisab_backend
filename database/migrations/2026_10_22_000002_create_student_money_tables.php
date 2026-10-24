@@ -46,27 +46,11 @@ return new class extends Migration
             $table->index(['business_id', 'owner_user_id', 'received_on'], 'student_money_in_owner_received_date_index');
         });
 
-        Schema::create('student_fees', function (Blueprint $table): void {
-            $table->id();
-            $table->uuid('uuid')->unique();
-            $table->foreignId('business_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('owner_user_id')->constrained('users')->cascadeOnDelete();
-            $table->string('name', 40);
-            $table->decimal('amount', 18, 2);
-            $table->string('currency', 3);
-            $table->date('due_on');
-            $table->date('paid_on')->nullable();
-            $table->timestamps();
-            $table->softDeletes();
-            $table->index(['business_id', 'owner_user_id', 'due_on']);
-        });
-
         Schema::create('student_expenses', function (Blueprint $table): void {
             $table->id();
             $table->uuid('uuid')->unique();
             $table->foreignId('business_id')->constrained()->cascadeOnDelete();
             $table->foreignId('owner_user_id')->constrained('users')->cascadeOnDelete();
-            $table->foreignId('student_fee_id')->nullable()->constrained('student_fees')->restrictOnDelete()->unique();
             $table->string('category', 24);
             $table->decimal('amount', 18, 2);
             $table->string('currency', 3);
@@ -81,7 +65,6 @@ return new class extends Migration
     public function down(): void
     {
         Schema::dropIfExists('student_expenses');
-        Schema::dropIfExists('student_fees');
         Schema::dropIfExists('student_money_in');
         Schema::dropIfExists('student_opening_balances');
         Schema::dropIfExists('student_settings');

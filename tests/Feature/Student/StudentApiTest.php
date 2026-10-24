@@ -3,14 +3,8 @@
 namespace Tests\Feature\Student;
 
 use App\Enums\BusinessRole;
-use App\Models\Business;
-use App\Models\User;
-use App\Support\Tenancy\CurrentBusiness;
-use App\Models\StudentExpense;
-use App\Models\StudentFee;
-use App\Models\StudentMoneyIn;
-use App\Models\SenderRecipient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
 
@@ -76,66 +70,49 @@ final class StudentApiTest extends TestCase
         $this->assertSame('60.00', $rows['FJD']['remaining_as_of_to']);
     }
 
-    public function test_fee_writes_are_retired_but_historical_fees_remain_readable(): void
+    public function test_student_fee_feature_is_absent_from_schema_and_api(): void
     {
-        $business = $this->makeBusiness();
-        $user = $this->actAs($business);
-        $fee = $this->inStudentContext($business, $user, function (): StudentFee {
-            return StudentFee::create([
-                'uuid' => $this->uuid(), 'name' => 'Tuition',
-                'amount' => '300', 'currency' => 'FJD',
-                'due_on' => now()->format('Y-m-d'),
-            ]);
-        });
+        $this->actAs($this->makeBusiness());
 
-        $this->getJson('/api/v1/student/fees')->assertOk()
-            ->assertJsonPath('data.meta.total', 1);
-        $this->getJson("/api/v1/student/fees/{$fee->uuid}")->assertOk()
-            ->assertJsonPath('data.name', 'Tuition');
+        $this->assertFalse(Schema::hasTable('student_fees'));
+        $this->assertFalse(Schema::hasColumn('student_expenses', 'student_fee_id'));
 
         foreach ([
-            ['post', '/api/v1/student/fees', ['name' => 'Another']],
-            ['patch', "/api/v1/student/fees/{$fee->uuid}", ['name' => 'Changed']],
-            ['post', "/api/v1/student/fees/{$fee->uuid}/pay", []],
-            ['post', "/api/v1/student/fees/{$fee->uuid}/unpay", []],
-            ['delete', "/api/v1/student/fees/{$fee->uuid}", []],
-            ['post', "/api/v1/student/fees/{$fee->uuid}/restore", []],
-        ] as [$method, $url, $body]) {
-            $this->json(strtoupper($method), $url, $body)
-                ->assertStatus(410)->assertJsonPath('code', 'STUDENT_FEES_RETIRED');
+            ['GET', '/api/v1/student/fees'],
+            ['POST', '/api/v1/student/fees'],
+            ['GET', '/api/v1/student/fees/unknown'],
+            ['PATCH', '/api/v1/student/fees/unknown'],
+            ['POST', '/api/v1/student/fees/unknown/pay'],
+            ['POST', '/api/v1/student/fees/unknown/unpay'],
+            ['DELETE', '/api/v1/student/fees/unknown'],
+            ['POST', '/api/v1/student/fees/unknown/restore'],
+        ] as [$method, $url]) {
+            $this->json($method, $url)->assertNotFound();
         }
 
-        $this->assertSame('Tuition', $this->inStudentContext(
-            $business, $user, fn () => StudentFee::firstOrFail()->name
-        ));
         $this->getJson('/api/v1/student/summary')->assertOk()
             ->assertJsonMissingPath('data.pending_fees');
     }
 
-    public function test_fee_linked_historical_expense_cannot_be_mutated_through_expense_api(): void
+    public function test_student_expense_remains_editable_deletable_and_restorable(): void
     {
-        $business = $this->makeBusiness();
-        $user = $this->actAs($business);
-        $expense = $this->inStudentContext($business, $user, function (): StudentExpense {
-            $fee = StudentFee::create([
-                'uuid' => $this->uuid(), 'name' => 'Registration',
-                'amount' => '75', 'currency' => 'FJD',
-                'due_on' => now()->format('Y-m-d'), 'paid_on' => now()->format('Y-m-d'),
-            ]);
+        $this->actAs($this->makeBusiness());
 
-            return StudentExpense::create([
-                'uuid' => $this->uuid(), 'student_fee_id' => $fee->id,
-                'category' => 'education', 'amount' => '75', 'currency' => 'FJD',
-                'spent_on' => now()->format('Y-m-d'),
-            ]);
-        });
+        $expense = $this->postJson('/api/v1/student/expenses', [
+            'category' => 'education', 'amount' => '75', 'currency' => 'FJD',
+        ])->assertCreated()->json('data');
 
-        $this->patchJson("/api/v1/student/expenses/{$expense->uuid}", ['amount' => '1'])
-            ->assertStatus(409)->assertJsonPath('code', 'STUDENT_FEE_LINKED');
-        $this->deleteJson("/api/v1/student/expenses/{$expense->uuid}")
-            ->assertStatus(409)->assertJsonPath('code', 'STUDENT_FEE_LINKED');
-        $this->getJson('/api/v1/student/summary')->assertOk()
-            ->assertJsonMissingPath('data.pending_fees');
+        $this->assertArrayNotHasKey('fee_id', $expense);
+
+        $this->patchJson("/api/v1/student/expenses/{$expense['id']}", [
+            'amount' => '85',
+        ])->assertOk()->assertJsonPath('data.amount', '85.00');
+
+        $this->deleteJson("/api/v1/student/expenses/{$expense['id']}")
+            ->assertOk();
+
+        $this->postJson("/api/v1/student/expenses/{$expense['id']}/restore")
+            ->assertOk()->assertJsonPath('data.amount', '85.00');
     }
 
     public function test_duplicate_expense_uuid_does_not_create_a_second_expense(): void
@@ -252,12 +229,4 @@ final class StudentApiTest extends TestCase
         ])->assertStatus(422)->assertJsonPath('error_codes.from_id.0', 'recipient_not_found');
     }
 
-    /**
-     * Assertions must set the same owner context as the API middleware.
-     * Without an active owner, tenant and owner scopes fail closed.
-     */
-    private function inStudentContext(Business $business, User $user, callable $callback): mixed
-    {
-        return app(CurrentBusiness::class)->runAsUser($business, $user->id, $callback);
-    }
 }

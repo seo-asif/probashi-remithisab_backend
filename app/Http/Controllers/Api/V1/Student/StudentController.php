@@ -3,10 +3,8 @@
 namespace App\Http\Controllers\Api\V1\Student;
 
 use App\Http\Controllers\Controller;
-use App\Exceptions\ApiException;
 use App\Http\Responses\ApiResponse;
 use App\Models\StudentExpense;
-use App\Models\StudentFee;
 use App\Models\StudentMoneyIn;
 use App\Models\StudentOpeningBalance;
 use App\Services\Student\StudentService;
@@ -174,55 +172,6 @@ final class StudentController extends Controller
         );
     }
 
-    public function fees(Request $request): JsonResponse
-    {
-        $query = StudentFee::query()->orderBy('due_on')->orderBy('id');
-        $page = Paging::paginate($query, $request);
-
-        return ApiResponse::success(Paging::shape($page, fn ($r) => $this->fee($r)));
-    }
-
-    public function storeFee(Request $request): JsonResponse
-    {
-        $this->rejectRetiredFeeWrites();
-    }
-
-    public function showFee(string $id): JsonResponse
-    {
-        return ApiResponse::success($this->fee(StudentFee::findByUuidOrFail($id, withTrashed: true)));
-    }
-
-    public function updateFee(Request $request, string $id): JsonResponse
-    {
-        $this->rejectRetiredFeeWrites();
-    }
-
-    public function payFee(Request $request, string $id): JsonResponse
-    {
-        $this->rejectRetiredFeeWrites();
-    }
-
-    public function unpayFee(string $id): JsonResponse
-    {
-        $this->rejectRetiredFeeWrites();
-    }
-
-    public function deleteFee(string $id): JsonResponse
-    {
-        $this->rejectRetiredFeeWrites();
-    }
-
-    public function restoreFee(string $id): JsonResponse
-    {
-        $this->rejectRetiredFeeWrites();
-    }
-
-    /** Fee creation and mutation are retired in v1.1.290. Read-only legacy retrieval remains for historical export. */
-    private function rejectRetiredFeeWrites(): never
-    {
-        throw new ApiException('STUDENT_FEES_RETIRED', 'Student fees are no longer supported.', 410);
-    }
-
     public function summary(Request $request): JsonResponse
     {
         [$from, $to] = $this->range($request);
@@ -270,21 +219,6 @@ final class StudentController extends Controller
             'currency' => $r->currency,
             'spent_on' => $r->spent_on->format('Y-m-d'),
             'note' => $r->note,
-            'fee_id' => $r->student_fee_id ? $r->fee?->uuid : null,
-            'deleted_at' => $r->deleted_at ? BusinessClock::utcIso($r->deleted_at) : null,
-        ];
-    }
-
-    private function fee(StudentFee $r): array
-    {
-        return [
-            'id' => $r->uuid,
-            'name' => $r->name,
-            'amount' => Dec::money($r->amount),
-            'currency' => $r->currency,
-            'due_on' => $r->due_on->format('Y-m-d'),
-            'paid' => $r->paid_on !== null,
-            'paid_on' => $r->paid_on?->format('Y-m-d'),
             'deleted_at' => $r->deleted_at ? BusinessClock::utcIso($r->deleted_at) : null,
         ];
     }

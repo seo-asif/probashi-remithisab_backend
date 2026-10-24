@@ -186,15 +186,6 @@ Route::prefix('v1')->group(function () {
             Route::delete('/expenses/{id}', 'deleteExpense');
             Route::post('/expenses/{id}/restore', 'restoreExpense');
 
-            Route::get('/fees', 'fees');
-            Route::post('/fees', 'storeFee');
-            Route::get('/fees/{id}', 'showFee');
-            Route::patch('/fees/{id}', 'updateFee');
-            Route::post('/fees/{id}/pay', 'payFee');
-            Route::post('/fees/{id}/unpay', 'unpayFee');
-            Route::delete('/fees/{id}', 'deleteFee');
-            Route::post('/fees/{id}/restore', 'restoreFee');
-
             Route::get('/summary', 'summary');
         });
 
