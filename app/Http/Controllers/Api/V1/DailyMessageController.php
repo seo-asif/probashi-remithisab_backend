@@ -15,10 +15,11 @@ final class DailyMessageController extends Controller
         return DailyMessage::query()
             ->where('status', 'published')
             ->orderBy('sort_order')->orderBy('id')
-            ->get(['uuid', 'code', 'message_bn', 'message_en'])
+            ->get(['uuid', 'code', 'message_bn', 'message_en', 'category'])
             ->map(fn (DailyMessage $message) => [
                 'id' => $message->uuid,
                 'code' => $message->code,
+                'category' => $message->category,
                 'bn' => $message->message_bn,
                 'en' => $message->message_en,
             ])->all();
