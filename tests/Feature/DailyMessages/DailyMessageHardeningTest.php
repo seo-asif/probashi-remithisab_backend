@@ -36,13 +36,15 @@ final class DailyMessageHardeningTest extends TestCase
         $this->patchJson(self::URL.'/'.$id, ['category' => 'savings'])->assertOk();
         $this->deleteJson(self::URL.'/'.$id)->assertOk();
 
+        $messageId = AuditLog::where('action', 'platform.daily_message.created')->value('target_id');
+        $this->assertNotNull($messageId);
         foreach (['created', 'updated', 'deleted'] as $action) {
             $this->assertDatabaseHas('audit_logs', [
                 'action' => 'platform.daily_message.'.$action,
-                'target_id' => $id,
+                'target_id' => $messageId,
             ]);
         }
-        $this->assertStringNotContainsString('Secret message', AuditLog::where('target_id', $id)->get()->toJson());
+        $this->assertStringNotContainsString('Secret message', AuditLog::where('target_id', $messageId)->get()->toJson());
     }
 
     public function test_bulk_status_and_import_are_audited(): void
