@@ -258,6 +258,7 @@ Route::prefix('v1')->group(function () {
     ])->prefix('platform')->group(function () {
         Route::controller(DailyMessageAdminController::class)->prefix('daily-messages')->group(function () {
             Route::get('/', 'index');
+            Route::get('/summary', 'summary');
             Route::post('/', 'store');
             Route::post('/import/preview', 'preview');
             Route::post('/import', 'import');

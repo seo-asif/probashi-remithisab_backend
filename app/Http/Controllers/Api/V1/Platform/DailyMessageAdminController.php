@@ -17,26 +17,45 @@ final class DailyMessageAdminController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = DailyMessage::query()->orderByDesc('id');
-        if (in_array($request->query('status'), ['draft', 'published'], true)) {
-            $query->where('status', $request->query('status'));
+        $filters = $request->validate([
+            'status' => ['sometimes', Rule::in(['draft', 'published'])],
+            'q' => ['sometimes', 'nullable', 'string', 'max:200'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
+            'page' => ['sometimes', 'integer', 'min:1'],
+        ]);
+
+        $query = DailyMessage::query()->orderBy('sort_order')->orderBy('id');
+        if (isset($filters['status'])) {
+            $query->where('status', $filters['status']);
         }
-        if ($request->filled('q')) {
-            $q = (string) $request->query('q');
+        if (filled($filters['q'] ?? null)) {
+            $q = $filters['q'];
             $query->where(fn ($builder) => $builder->where('code', 'like', '%'.$q.'%')
                 ->orWhere('message_bn', 'like', '%'.$q.'%')
                 ->orWhere('message_en', 'like', '%'.$q.'%'));
         }
-        return ApiResponse::success($query->paginate(30));
+
+        return ApiResponse::success($query->paginate($filters['per_page'] ?? 30));
     }
 
-    private function rules(?DailyMessage $message = null): array
+    public function summary(): JsonResponse
     {
+        return ApiResponse::success([
+            'total' => DailyMessage::count(),
+            'published' => DailyMessage::where('status', 'published')->count(),
+            'draft' => DailyMessage::where('status', 'draft')->count(),
+        ]);
+    }
+
+    private function rules(?DailyMessage $message = null, bool $partial = false): array
+    {
+        $presence = $partial ? 'sometimes' : 'required';
+
         return [
-            'code' => ['required', 'string', 'max:64', Rule::unique('daily_messages', 'code')->ignore($message?->id)],
-            'message_bn' => ['required', 'string', 'max:1000'],
-            'message_en' => ['nullable', 'string', 'max:1000'],
-            'status' => ['required', Rule::in(['draft', 'published'])],
+            'code' => [$presence, 'string', 'max:64', Rule::unique('daily_messages', 'code')->ignore($message?->id)],
+            'message_bn' => [$presence, 'string', 'max:1000'],
+            'message_en' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            'status' => [$presence, Rule::in(['draft', 'published'])],
             'sort_order' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
         ];
     }
@@ -50,7 +69,10 @@ final class DailyMessageAdminController extends Controller
     public function update(Request $request, string $id): JsonResponse
     {
         $message = DailyMessage::where('uuid', $id)->firstOrFail();
-        $data = $request->validate($this->rules($message));
+        $data = $request->validate($this->rules($message, true));
+        if ($data === []) {
+            throw ValidationException::withMessages(['fields' => 'At least one field is required.']);
+        }
         $message->update($data);
         return ApiResponse::success($message->refresh(), 'Message updated.');
     }
