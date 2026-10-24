@@ -10,6 +10,24 @@ final class SenderRemittancePreviewTest extends TestCase
 {
     use Phase3Fixtures, RefreshDatabase;
 
+    public function test_options_are_server_authoritative(): void
+    {
+        $this->actAs($this->makeBusiness());
+
+        $this->getJson('/api/v1/sender-remittances/options')
+            ->assertOk()
+            ->assertJsonPath('data.methods.0', 'bKash')
+            ->assertJsonPath('data.charge_types.0', 'included')
+            ->assertJsonPath('data.purposes.0', 'house')
+            ->assertJsonPath('data.notes_max', 100)
+            ->assertJsonFragment([
+                'code' => 'JPY',
+                'amount_max' => '1500000',
+                'rate_max' => '5',
+                'rate_decimals' => 4,
+            ]);
+    }
+
     public function test_preview_uses_server_calculator_without_creating_record(): void
     {
         $this->actAs($this->makeBusiness());
