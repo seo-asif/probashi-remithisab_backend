@@ -53,7 +53,7 @@ final class CsvExportTest extends TestCase
 
         $csv = $this->get('/api/v1/reports/sender/csv?period=all')->assertOk()->streamedContent();
         $this->assertStringContainsString('Remittance,2026-09-20', $csv);
-        $this->assertStringContainsString('Money received,2026-09-19,Father,BDT,4500.00', $csv);
+        $this->assertStringContainsString('"Money received",2026-09-19,Father,BDT,4500.00', $csv);
         $this->assertStringNotContainsString(',99.00,', $csv);
         $this->assertStringNotContainsString(',77.00,', $csv);
         $this->assertStringContainsString("\r\n", $csv);
@@ -62,7 +62,7 @@ final class CsvExportTest extends TestCase
     public function test_manager_datasets_and_business_isolation(): void
     {
         $business = $this->makeBusiness(['timezone' => 'Pacific/Fiji']);
-        $this->actAs($business);
+        $firstOwner = $this->actAs($business);
         $this->unlimited($business);
         $customer = $this->customer();
         $this->transaction($customer['id'], ['occurred_at' => '2026-09-15 10:00']);
@@ -72,7 +72,7 @@ final class CsvExportTest extends TestCase
         $this->unlimited($other);
         $otherCustomer = $this->customer(['name' => 'Other Tenant']);
         $this->transaction($otherCustomer['id'], ['amount' => '333']);
-        $this->actAs($business);
+        $this->login($firstOwner);
         $tx = $this->get('/api/v1/reports/manager/csv?dataset=transactions&period=all')->assertOk()->streamedContent();
         $this->assertStringContainsString('Rahim Uddin', $tx);
         $this->assertStringNotContainsString('Other Tenant', $tx);
