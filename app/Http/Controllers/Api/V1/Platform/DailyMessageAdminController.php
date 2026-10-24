@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1\Platform;
 use App\Http\Controllers\Controller;
 use App\Http\Responses\ApiResponse;
 use App\Models\DailyMessage;
+use App\Support\DailyMessageCategories;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,12 +20,16 @@ final class DailyMessageAdminController extends Controller
     {
         $filters = $request->validate([
             'status' => ['sometimes', Rule::in(['draft', 'published'])],
+            'category' => ['sometimes', Rule::in(DailyMessageCategories::codes())],
             'q' => ['sometimes', 'nullable', 'string', 'max:200'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
             'page' => ['sometimes', 'integer', 'min:1'],
         ]);
 
         $query = DailyMessage::query()->orderBy('sort_order')->orderBy('id');
+        if (isset($filters['category'])) {
+            $query->where('category', $filters['category']);
+        }
         if (isset($filters['status'])) {
             $query->where('status', $filters['status']);
         }
@@ -57,6 +62,7 @@ final class DailyMessageAdminController extends Controller
             'message_en' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'status' => [$presence, Rule::in(['draft', 'published'])],
             'sort_order' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
+            'category' => ['sometimes', 'nullable', Rule::in(DailyMessageCategories::codes())],
         ];
     }
 
@@ -154,8 +160,8 @@ final class DailyMessageAdminController extends Controller
             }
             $headers = array_map(fn ($s) => trim((string) $s), $headers);
             $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', $headers[0]);
-            if ($headers !== ['code', 'message_bn', 'message_en', 'status']) {
-                throw ValidationException::withMessages(['file' => 'Expected columns: code,message_bn,message_en,status']);
+            if (!in_array($headers, [['code', 'message_bn', 'message_en', 'status'], ['code', 'message_bn', 'message_en', 'status', 'category']], true)) {
+                throw ValidationException::withMessages(['file' => 'Expected columns: code,message_bn,message_en,status[,category]']);
             }
 
             $rows = [];
@@ -165,7 +171,7 @@ final class DailyMessageAdminController extends Controller
                 if ($line > 1001) {
                     throw ValidationException::withMessages(['file' => 'Maximum 1000 rows per upload.']);
                 }
-                if (count($values) !== 4) {
+                if (count($values) !== count($headers)) {
                     throw ValidationException::withMessages(['file' => "Invalid column count on row {$line}."]);
                 }
                 $row = array_combine($headers, array_map('trim', $values));
@@ -174,6 +180,7 @@ final class DailyMessageAdminController extends Controller
                     'message_bn' => ['required', 'string', 'max:1000'],
                     'message_en' => ['nullable', 'string', 'max:1000'],
                     'status' => ['required', Rule::in(['draft', 'published'])],
+                    'category' => ['sometimes', 'nullable', Rule::in(DailyMessageCategories::codes())],
                 ]);
                 if ($validator->fails()) {
                     throw ValidationException::withMessages(['file' => "Invalid data on row {$line}."]);
@@ -194,10 +201,10 @@ final class DailyMessageAdminController extends Controller
         return response()->streamDownload(function (): void {
             $output = fopen('php://output', 'wb');
             fwrite($output, "\xEF\xBB\xBF");
-            fputcsv($output, ['code', 'message_bn', 'message_en', 'status']);
+            fputcsv($output, ['code', 'message_bn', 'message_en', 'status', 'category']);
             DailyMessage::orderBy('id')->chunk(200, function ($messages) use ($output): void {
                 foreach ($messages as $message) {
-                    $cells = [$message->code, $message->message_bn, $message->message_en, $message->status];
+                    $cells = [$message->code, $message->message_bn, $message->message_en, $message->status, $message->category];
                     fputcsv($output, array_map(function ($value) {
                         $value = (string) ($value ?? '');
                         return preg_match('/^[\s]*[=+@\-]/u', $value) ? "'".$value : $value;
