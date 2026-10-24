@@ -54,7 +54,7 @@ final class SenderRemittancePreviewTest extends TestCase
             'charge_type' => 'excluded',
             'incentive_pct' => '0',
         ])->assertStatus(422)
-            ->assertJsonPath('error_codes.rate.0', 'financial_number_invalid');
+            ->assertJsonPath('error_codes.rate.0', 'rate_invalid');
     }
 
     public function test_preview_rejects_invalid_included_charge(): void
