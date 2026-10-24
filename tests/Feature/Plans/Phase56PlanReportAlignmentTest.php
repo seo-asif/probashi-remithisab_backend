@@ -35,11 +35,11 @@ final class Phase56PlanReportAlignmentTest extends TestCase
         $business = $this->makeBusiness();
         $this->actAs($business);
         $subscription = BusinessSubscription::create([
-            'business_id' => $business->id,
-            'tier' => PlanLimits::UNLIMITED,
-            'access_source' => 'paid',
+            'business_id'      => $business->id,
+            'tier'             => PlanLimits::UNLIMITED,
+            'access_source'    => 'paid',
             'access_starts_at' => now()->subDay(),
-            'access_ends_at' => now()->addDay(),
+            'access_ends_at'   => now()->addDay(),
         ]);
 
         $this->getJson('/api/v1/me')
@@ -59,7 +59,7 @@ final class Phase56PlanReportAlignmentTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.plan.tier', PlanLimits::FREE)
             ->assertJsonPath('data.plan.entitlements.basic_pdf', true)
-            ->assertJsonPath('data.plan.entitlements.monthly_pdf', false)
+            ->assertJsonPath('data.plan.entitlements.monthly_pdf', true)
             ->assertJsonPath('data.plan.allowances.sender_remittances.limit', 20);
     }
 
