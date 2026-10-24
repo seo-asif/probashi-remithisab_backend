@@ -151,6 +151,7 @@ Route::prefix('v1')->group(function () {
         });
         Route::controller(SenderRemittanceController::class)->group(function () {
             Route::get('/sender-remittances', 'index');
+            Route::get('/sender-remittances/options', 'options');
             Route::post('/sender-remittances', 'store');
             Route::post('/sender-remittances/preview', 'preview');
             Route::get('/sender-remittances/{id}', 'show');
