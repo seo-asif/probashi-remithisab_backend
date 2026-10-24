@@ -60,8 +60,6 @@ class ManagerWriteAuthorizationTest extends TestCase
         $business = $this->makeBusiness();
         $this->actAs($business, BusinessRole::Operator);
 
-        $this->postJson('/api/v1/customers', [
-            'name' => 'Operator Customer',
-        ])->assertCreated();
+        $this->customer(['name' => 'Operator Customer']);
     }
 }
