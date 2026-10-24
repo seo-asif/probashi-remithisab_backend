@@ -259,7 +259,9 @@ Route::prefix('v1')->group(function () {
         Route::controller(DailyMessageAdminController::class)->prefix('daily-messages')->group(function () {
             Route::get('/', 'index');
             Route::post('/', 'store');
+            Route::post('/import/preview', 'preview');
             Route::post('/import', 'import');
+            Route::post('/bulk-status', 'bulkStatus');
             Route::get('/export', 'export');
             Route::patch('/{id}', 'update');
             Route::delete('/{id}', 'destroy');
