@@ -102,39 +102,39 @@ Route::prefix('v1')->group(function () {
         // ---- Remittance Manager mode (shared by everyone in the business)
         Route::controller(CustomerController::class)->group(function () {
             Route::get('/customers', 'index');
-            Route::post('/customers', 'store');
+            Route::post('/customers', 'store')->middleware('manager.write');
             Route::get('/customers/{id}', 'show');
-            Route::patch('/customers/{id}', 'update');
-            Route::delete('/customers/{id}', 'destroy');
-            Route::post('/customers/{id}/restore', 'restore');
-            Route::post('/customers/{id}/archive', 'archive');
-            Route::post('/customers/{id}/unarchive', 'unarchive');
-            Route::delete('/customers/{id}/delete-new', 'deleteNew');
+            Route::patch('/customers/{id}', 'update')->middleware('manager.write');
+            Route::delete('/customers/{id}', 'destroy')->middleware('manager.write');
+            Route::post('/customers/{id}/restore', 'restore')->middleware('manager.write');
+            Route::post('/customers/{id}/archive', 'archive')->middleware('manager.write');
+            Route::post('/customers/{id}/unarchive', 'unarchive')->middleware('manager.write');
+            Route::delete('/customers/{id}/delete-new', 'deleteNew')->middleware('manager.write');
         });
         Route::controller(TransactionController::class)->group(function () {
             Route::get('/manager-transactions', 'index');
-            Route::post('/manager-transactions', 'store');
+            Route::post('/manager-transactions', 'store')->middleware('manager.write');
             Route::get('/manager-transactions/{id}', 'show');
-            Route::patch('/manager-transactions/{id}', 'update');
-            Route::patch('/manager-transactions/{id}/status', 'status');
-            Route::delete('/manager-transactions/{id}', 'destroy');
-            Route::post('/manager-transactions/{id}/restore', 'restore');
-            Route::post('/manager-transactions/{id}/payments', 'addPayment');
-            Route::post('/manager-transactions/{id}/payments/{paymentId}/reverse', 'reversePayment');
+            Route::patch('/manager-transactions/{id}', 'update')->middleware('manager.write');
+            Route::patch('/manager-transactions/{id}/status', 'status')->middleware('manager.write');
+            Route::delete('/manager-transactions/{id}', 'destroy')->middleware('manager.write');
+            Route::post('/manager-transactions/{id}/restore', 'restore')->middleware('manager.write');
+            Route::post('/manager-transactions/{id}/payments', 'addPayment')->middleware('manager.write');
+            Route::post('/manager-transactions/{id}/payments/{paymentId}/reverse', 'reversePayment')->middleware('manager.write');
         });
         Route::controller(ManagerRemittanceController::class)->group(function () {
             Route::get('/manager-remittances', 'index');
-            Route::post('/manager-remittances', 'store');
+            Route::post('/manager-remittances', 'store')->middleware('manager.write');
             Route::get('/manager-remittances/{id}', 'show');
-            Route::patch('/manager-remittances/{id}', 'update');
-            Route::delete('/manager-remittances/{id}', 'destroy');
-            Route::post('/manager-remittances/{id}/restore', 'restore');
+            Route::patch('/manager-remittances/{id}', 'update')->middleware('manager.write');
+            Route::delete('/manager-remittances/{id}', 'destroy')->middleware('manager.write');
+            Route::post('/manager-remittances/{id}/restore', 'restore')->middleware('manager.write');
         });
         Route::controller(SendingNumberController::class)->group(function () {
             Route::get('/sending-numbers', 'index');
-            Route::post('/sending-numbers', 'store');
-            Route::patch('/sending-numbers/{id}', 'update');
-            Route::delete('/sending-numbers/{id}', 'destroy');
+            Route::post('/sending-numbers', 'store')->middleware('manager.write');
+            Route::patch('/sending-numbers/{id}', 'update')->middleware('manager.write');
+            Route::delete('/sending-numbers/{id}', 'destroy')->middleware('manager.write');
         });
 
         // ---- Sender mode (PRIVATE to the logged-in user)
