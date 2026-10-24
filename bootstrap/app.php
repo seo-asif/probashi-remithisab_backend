@@ -28,10 +28,10 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->alias([
-    'business.context' => ResolveCurrentBusiness::class,
-    'platform.admin' => RequirePlatformAdmin::class,
+            'business.context' => ResolveCurrentBusiness::class,
+            'platform.admin' => RequirePlatformAdmin::class,
             'manager.write' => RequireManagerWriteAccess::class,
-]);
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         $isApi = fn(Request $request) => $request->is('api/*') || $request->expectsJson();
