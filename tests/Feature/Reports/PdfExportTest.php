@@ -50,6 +50,29 @@ final class PdfExportTest extends TestCase
         }
     }
 
+    public function test_sender_pdf_with_remittance_has_pdf_signature_and_eof(): void
+    {
+        $business = $this->makeBusiness(['timezone' => 'Pacific/Fiji']);
+        $this->actAs($business);
+        $this->senderRemittance([
+            'amount' => '250',
+            'occurred_at' => now()->format('Y-m-d H:i:s'),
+        ]);
+
+        $response = $this->get('/api/v1/reports/sender/pdf?period=this_month')
+            ->assertOk()
+            ->assertHeader('Content-Type', 'application/pdf');
+
+        $bytes = $response->getContent();
+        $this->assertStringStartsWith('%PDF-', $bytes);
+        $this->assertStringContainsString('%%EOF', substr($bytes, -2048));
+        $this->assertGreaterThan(300, strlen($bytes));
+        $this->assertStringContainsString(
+            'attachment;',
+            $response->headers->get('Content-Disposition', '')
+        );
+    }
+
     public function test_free_account_cannot_export_other_periods(): void
     {
         $business = $this->makeBusiness();
