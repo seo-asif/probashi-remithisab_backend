@@ -33,8 +33,7 @@ class ProfileApiTest extends TestCase
 
     public function test_email_cannot_be_changed_without_verification(): void
     {
-        $user = User::factory()->create(['email_verified_at' => now()]);
-        Sanctum::actingAs($user);
+        $user = $this->actAs($this->makeBusiness());
 
         $this->patchJson('/api/v1/account/profile', [
             'email' => 'unverified-new@example.com',
@@ -45,8 +44,7 @@ class ProfileApiTest extends TestCase
 
     public function test_invalid_whatsapp_is_rejected(): void
     {
-        $user = User::factory()->create(['email_verified_at' => now()]);
-        Sanctum::actingAs($user);
+        $user = $this->actAs($this->makeBusiness());
 
         $this->patchJson('/api/v1/account/profile', ['whatsapp' => '<script>'])->assertUnprocessable();
     }
