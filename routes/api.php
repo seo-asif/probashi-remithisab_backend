@@ -39,6 +39,8 @@ use App\Http\Controllers\Api\V1\Student\StudentController;
 use App\Http\Controllers\Api\V1\Work\WorkController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\V1\DailyMessageController;
+use App\Http\Controllers\Api\V1\DailyMessageLikeController;
+use App\Http\Controllers\Api\V1\Platform\DailyMessageAnalyticsController;
 use App\Http\Controllers\Api\V1\Platform\DailyMessageAdminController;
 
 // All routes are served under /api/v1
@@ -59,6 +61,12 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/password/forgot', ForgotPasswordController::class)->middleware('throttle:otp-send');
     Route::post('/auth/password/verify-code', VerifyResetCodeController::class)->middleware('throttle:otp-verify');
     Route::post('/auth/password/reset', ResetPasswordController::class)->middleware('throttle:otp-verify');
+
+    Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+        Route::get('/daily-messages/likes', [DailyMessageLikeController::class, 'index']);
+        Route::put('/daily-messages/{id}/like', [DailyMessageLikeController::class, 'like']);
+        Route::delete('/daily-messages/{id}/like', [DailyMessageLikeController::class, 'unlike']);
+    });
 
     // ---- logged in (any account state that holds a token)
     Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
@@ -256,6 +264,9 @@ Route::prefix('v1')->group(function () {
         'platform.admin',
         'throttle:api',
     ])->prefix('platform')->group(function () {
+        Route::get('/daily-messages/analytics', [DailyMessageAnalyticsController::class, 'summary']);
+        Route::get('/daily-messages/top-liked', [DailyMessageAnalyticsController::class, 'topLiked']);
+        Route::get('/daily-messages/category-stats', [DailyMessageAnalyticsController::class, 'categoryStats']);
         Route::controller(DailyMessageAdminController::class)->prefix('daily-messages')->group(function () {
             Route::get('/', 'index');
             Route::get('/summary', 'summary');
