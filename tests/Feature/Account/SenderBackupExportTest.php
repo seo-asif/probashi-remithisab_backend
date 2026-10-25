@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Account;
 
+use App\Enums\BusinessRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -23,7 +24,7 @@ final class SenderBackupExportTest extends TestCase
         $first = $this->actAs($business);
         $this->recipient(['name' => 'First Family']);
         $this->senderRemittance();
-        $this->actAs($business);
+        $this->actAs($business, BusinessRole::Operator);
         $this->recipient(['name' => 'Other Family']);
         $this->senderRemittance();
 
