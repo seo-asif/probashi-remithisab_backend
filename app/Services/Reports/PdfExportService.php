@@ -45,7 +45,7 @@ final class PdfExportService
             if (!is_string($bytes)
                 || !str_starts_with($bytes, '%PDF-')
                 || !str_contains(substr($bytes, -2048), '%%EOF')) {
-                throw new \\RuntimeException('PDF rendering failed integrity validation.');
+                throw new \RuntimeException('PDF rendering failed integrity validation.');
             }
 
             $filename = "probashi-{$mode}-{$period->period}.pdf";
