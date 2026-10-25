@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api\V1\Account;
 use App\Http\Controllers\Controller;
 use App\Http\Responses\ApiResponse;
 use App\Services\Account\SenderBackupPreviewService;
-use App\Services\Account\SenderBackupValidator;
+use App\Services\Account\SenderBackupInput;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -13,10 +13,10 @@ final class SenderBackupPreviewController extends Controller
 {
     public function __invoke(
         Request $request,
-        SenderBackupValidator $validator,
+        SenderBackupInput $input,
         SenderBackupPreviewService $preview,
     ): JsonResponse {
-        $validated = $validator->validate($request->json()->all());
+        $validated = $input->parse($request);
         $response = ApiResponse::success(
             $preview->preview($validated),
             'Sender backup preview completed. No records were changed.'
