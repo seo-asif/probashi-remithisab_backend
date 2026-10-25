@@ -3,7 +3,7 @@
 namespace Tests\Feature\Account;
 
 use App\Enums\BusinessRole;
-use App\Models\SenderRecipient;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -48,18 +48,18 @@ final class SenderBackupExportTest extends TestCase
     {
         $firstBusiness = $this->makeBusiness();
         $firstUser = $this->actAs($firstBusiness);
-        $this->recipient(['name' => 'Private First Business']);
+        $this->recipient(['name' => 'First Business']);
 
         $secondBusiness = $this->makeBusiness();
         $this->actAs($secondBusiness);
-        $this->recipient(['name' => 'Private Second Business']);
+        $this->recipient(['name' => 'Second Business']);
 
         $this->login($firstUser);
         $response = $this->get(self::URL)->assertOk()
             ->assertJsonCount(1, 'datasets.recipients')
-            ->assertJsonPath('datasets.recipients.0.name', 'Private First Business');
+            ->assertJsonPath('datasets.recipients.0.name', 'First Business');
 
-        $this->assertStringNotContainsString('Private Second Business', $response->getContent());
+        $this->assertStringNotContainsString('Second Business', $response->getContent());
     }
 
     public function test_soft_deleted_recipient_is_preserved_for_future_restore(): void
@@ -74,7 +74,7 @@ final class SenderBackupExportTest extends TestCase
             ->assertJsonPath('datasets.recipients.0.name', 'Archived Family');
 
         $this->assertNotNull(
-            SenderRecipient::withTrashed()->where('uuid', $recipient['id'])->firstOrFail()->deleted_at
+            DB::table('sender_recipients')->where('uuid', $recipient['id'])->value('deleted_at')
         );
     }
 
