@@ -18,12 +18,21 @@ final class SenderRemittancePreviewTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.methods.0', 'bKash')
             ->assertJsonPath('data.charge_types.0', 'included')
-            ->assertJsonPath('data.purposes.0', 'house')
+            ->assertJsonPath('data.purposes', [
+                'family',
+                'medicine',
+                'school',
+                'house',
+                'loan',
+                'eid',
+                'savings',
+                'other',
+            ])
             ->assertJsonPath('data.notes_max', 100)
             ->assertJsonFragment([
-                'code' => 'JPY',
-                'amount_max' => '1500000',
-                'rate_max' => '5',
+                'code'          => 'JPY',
+                'amount_max'    => '1500000',
+                'rate_max'      => '5',
                 'rate_decimals' => 4,
             ]);
     }
@@ -33,11 +42,11 @@ final class SenderRemittancePreviewTest extends TestCase
         $this->actAs($this->makeBusiness());
 
         $this->postJson('/api/v1/sender-remittances/preview', [
-            'currency' => 'FJD',
-            'amount' => '500.00',
-            'rate' => '50.00',
-            'charge' => '10.00',
-            'charge_type' => 'included',
+            'currency'      => 'FJD',
+            'amount'        => '500.00',
+            'rate'          => '50.00',
+            'charge'        => '10.00',
+            'charge_type'   => 'included',
             'incentive_pct' => '2.50',
         ])->assertOk()
             ->assertJsonPath('data.currency', 'FJD')
@@ -55,21 +64,21 @@ final class SenderRemittancePreviewTest extends TestCase
         $this->actAs($this->makeBusiness());
 
         $this->postJson('/api/v1/sender-remittances/preview', [
-            'currency' => 'JPY',
-            'amount' => '1000.00',
-            'rate' => '0.5234',
-            'charge' => '0',
-            'charge_type' => 'excluded',
+            'currency'      => 'JPY',
+            'amount'        => '1000.00',
+            'rate'          => '0.5234',
+            'charge'        => '0',
+            'charge_type'   => 'excluded',
             'incentive_pct' => '0',
         ])->assertOk()
             ->assertJsonPath('data.family_bdt', '523.40');
 
         $this->postJson('/api/v1/sender-remittances/preview', [
-            'currency' => 'FJD',
-            'amount' => '100.00',
-            'rate' => '50.1234',
-            'charge' => '0',
-            'charge_type' => 'excluded',
+            'currency'      => 'FJD',
+            'amount'        => '100.00',
+            'rate'          => '50.1234',
+            'charge'        => '0',
+            'charge_type'   => 'excluded',
             'incentive_pct' => '0',
         ])->assertStatus(422)
             ->assertJsonPath('error_codes.rate.0', 'rate_invalid');
@@ -80,11 +89,11 @@ final class SenderRemittancePreviewTest extends TestCase
         $this->actAs($this->makeBusiness());
 
         $this->postJson('/api/v1/sender-remittances/preview', [
-            'currency' => 'FJD',
-            'amount' => '100.00',
-            'rate' => '50.00',
-            'charge' => '100.00',
-            'charge_type' => 'included',
+            'currency'      => 'FJD',
+            'amount'        => '100.00',
+            'rate'          => '50.00',
+            'charge'        => '100.00',
+            'charge_type'   => 'included',
             'incentive_pct' => '0',
         ])->assertStatus(422)
             ->assertJsonPath('error_codes.charge.0', 'charge_not_less_than_amount');
