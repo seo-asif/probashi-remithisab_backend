@@ -3,6 +3,7 @@
 namespace App\Services\Reports;
 
 use App\Models\Business;
+use App\Services\Student\StudentService;
 use App\Support\Reports\ManagerReport;
 use App\Support\Reports\ReportPeriod;
 use App\Support\Reports\SenderReport;
@@ -18,9 +19,18 @@ final class PdfExportService
         $current = app(CurrentBusiness::class);
         $generate = function () use ($mode, $period, $business): Response {
             $clock = BusinessClock::for($business);
-            $summary = $mode === 'sender'
-            ? (new SenderReport($clock))->totals($period)
-            : (new ManagerReport($clock))->totals($period);
+            $summary = match ($mode) {
+                'sender' => (new SenderReport($clock))->totals($period),
+                'manager' => (new ManagerReport($clock))->totals($period),
+                'student' => [
+                    'timezone' => $clock->timezone(),
+                    ...(app(StudentService::class)->summary(
+                        $period->fromDate ?? '1900-01-01',
+                        $period->toDate ?? $clock->toLocal(now())->format('Y-m-d'),
+                    )),
+                ],
+                default => throw new \InvalidArgumentException('Unsupported PDF report mode.'),
+            };
 
             $pdf = Pdf::loadView('reports.export', [
                 'mode'    => $mode,
@@ -46,7 +56,7 @@ final class PdfExportService
 
         // Render before the middleware clears CurrentBusiness, and always
         // restore the trusted user scope for sender reports.
-        return $mode === 'sender'
+        return in_array($mode, ['sender', 'student'], true)
         ? $current->runAsUser($business, $userId, $generate)
         : $current->runAs($business, $generate);
     }

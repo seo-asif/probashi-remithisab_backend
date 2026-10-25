@@ -31,6 +31,11 @@ final class PdfExportController extends Controller
         return $this->download($request, 'manager');
     }
 
+    public function student(Request $request): Response
+    {
+        return $this->download($request, 'student');
+    }
+
     private function download(Request $request, string $mode): Response
     {
         $business = $this->current->get();

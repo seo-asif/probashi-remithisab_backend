@@ -15,7 +15,7 @@ th { background: #f3f6f7; }
 </head>
 <body>
 <h1>Probashi RemitHisab</h1>
-<p>{{ $mode === 'sender' ? 'Sender summary' : 'Manager summary' }}</p>
+<p>{{ ucfirst($mode) }} summary</p>
 <small>Period: {{ $period->fromDate ?? 'All time' }} to {{ $period->toDate ?? 'Present' }} | Timezone: {{ $summary['timezone'] }}</small>
 @if ($mode === 'sender')
 <h2>Summary</h2>
@@ -30,6 +30,25 @@ th { background: #f3f6f7; }
 <tr><td>{{ $row['currency'] }}</td><td>{{ $row['times_sent'] }}</td><td>{{ $row['total_sent'] }}</td><td>{{ $row['bank_charges'] }}</td><td>{{ $row['family_bdt'] }}</td></tr>
 @endforeach
 </tbody></table>
+@elseif ($mode === 'student')
+<h2>Balances by currency</h2>
+<table><thead><tr><th>Currency</th><th>Opening</th><th>Received</th><th>Spent</th><th>Balance at end</th></tr></thead><tbody>
+@forelse ($summary['by_currency'] as $row)
+<tr><td>{{ $row['currency'] }}</td><td>{{ $row['opening_balance'] }}</td><td>{{ $row['period_received'] }}</td><td>{{ $row['period_spent'] }}</td><td>{{ $row['remaining_as_of_to'] }}</td></tr>
+@empty
+<tr><td colspan="5">No recorded activity.</td></tr>
+@endforelse
+</tbody></table>
+@foreach ($summary['by_currency'] as $row)
+@if (!empty($row['expense_categories']))
+<h2>Expenses by category ({{ $row['currency'] }})</h2>
+<table><thead><tr><th>Category</th><th>Amount</th></tr></thead><tbody>
+@foreach ($row['expense_categories'] as $category => $amount)
+<tr><td>{{ $category }}</td><td>{{ $amount }}</td></tr>
+@endforeach
+</tbody></table>
+@endif
+@endforeach
 @else
 <h2>By currency</h2>
 <table><thead><tr><th>Currency</th><th>Received</th><th>Pending</th><th>Commission earned</th><th>BDT owed</th></tr></thead><tbody>
