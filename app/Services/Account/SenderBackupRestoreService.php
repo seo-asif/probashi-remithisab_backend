@@ -145,6 +145,7 @@ final class SenderBackupRestoreService
                     'received' => (bool) $row['received'],
                     'received_at' => $row['received_at'] ?? null,
                     'purpose' => $row['purpose'] ?? null,
+                    'goal_id' => $goalId,
                     'notes' => $row['notes'] ?? null,
                     'occurred_at' => $row['occurred_at'],
                     'timezone' => $row['timezone'],
