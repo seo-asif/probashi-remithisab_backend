@@ -63,7 +63,7 @@ final class SenderBackupPreviewService
 
         $existing = [];
         // Bound IN lists; do not fetch unneeded financial or personal fields.
-        foreach (array_chunk($uuids, 500) as $chunk) {
+        foreach (array_chunk(array_map('strtolower', $uuids), 500) as $chunk) {
             foreach ($model::withTrashed()->whereIn('uuid', $chunk)->pluck('uuid') as $uuid) {
                 $existing[strtolower((string) $uuid)] = true;
             }
