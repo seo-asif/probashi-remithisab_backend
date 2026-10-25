@@ -3,6 +3,8 @@
 use App\Http\Controllers\Api\V1\Account\AppSettingsController;
 use App\Http\Controllers\Api\V1\Account\ProfileController;
 use App\Http\Controllers\Api\V1\Account\SenderBackupExportController;
+use App\Http\Controllers\Api\V1\Account\SenderBackupPreviewController;
+use App\Http\Controllers\Api\V1\Account\SenderBackupRestoreController;
 use App\Http\Controllers\Api\V1\Auth\ChangePasswordController;
 use App\Http\Controllers\Api\V1\Auth\ForgotPasswordController;
 use App\Http\Controllers\Api\V1\Auth\GoogleLinkController;
@@ -96,6 +98,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/me', MeController::class);
         Route::get('/account/profile', [ProfileController::class, 'show']);
         Route::get('/account/backup/sender', SenderBackupExportController::class);
+        Route::post('/account/backup/sender/preview', SenderBackupPreviewController::class);
+        Route::post('/account/backup/sender/restore', SenderBackupRestoreController::class);
         Route::patch('/account/profile', [ProfileController::class, 'update']);
         Route::get('/account/settings', [AppSettingsController::class, 'show']);
         Route::patch('/account/settings', [AppSettingsController::class, 'update']);

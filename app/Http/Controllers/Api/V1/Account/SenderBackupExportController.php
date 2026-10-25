@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\SenderRecipient;
 use App\Models\SenderRemittance;
 use App\Models\SavingsGoal;
+use App\Services\Account\SenderBackupOutput;
 use App\Services\Auth\AuditLogger;
 use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Http\JsonResponse;
@@ -13,7 +14,7 @@ use Illuminate\Http\Request;
 
 final class SenderBackupExportController extends Controller
 {
-    public function __invoke(Request $request, AuditLogger $audit, CurrentBusiness $current): JsonResponse
+    public function __invoke(Request $request, AuditLogger $audit, CurrentBusiness $current, SenderBackupOutput $output): JsonResponse
     {
         // These models enforce both the current business and the authenticated owner
         // through global scopes. Never remove those scopes for a backup.
@@ -46,9 +47,7 @@ final class SenderBackupExportController extends Controller
                 ];
             })->values()->all();
 
-        $audit->record('account.sender_backup_exported', $request->user(), $current->id(), $request->user());
-
-        return response()->json([
+        $response = $output->response([
             'format' => 'probashi-remithisab-sender',
             'schema_version' => 1,
             'exported_at' => now()->toIso8601String(),
@@ -57,13 +56,12 @@ final class SenderBackupExportController extends Controller
                 'goals' => $goals,
                 'remittances' => $remittances,
             ],
-        ], 200, [
-            'Content-Type' => 'application/json; charset=UTF-8',
-            'Content-Disposition' => 'attachment; filename="probashi-sender-backup.json"',
-            'Cache-Control' => 'private, no-store, max-age=0',
-            'Pragma' => 'no-cache',
-            'X-Content-Type-Options' => 'nosniff',
-        ], JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        ]);
+
+        // Record only successful exports, after the size check passes.
+        $audit->record('account.sender_backup_exported', $request->user(), $current->id(), $request->user());
+
+        return $response;
     }
 
     private function only($model, array $fields): array
