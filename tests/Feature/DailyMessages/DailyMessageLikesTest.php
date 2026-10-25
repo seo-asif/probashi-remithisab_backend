@@ -51,7 +51,8 @@ final class DailyMessageLikesTest extends TestCase {
   $this->getJson('/api/v1/platform/daily-messages/analytics')->assertOk()
    ->assertJsonPath('data.total_likes',1)->assertJsonPath('data.unique_likers',1);
   $this->getJson('/api/v1/platform/daily-messages/top-liked')->assertOk()
-   ->assertJsonPath('data.0.code','LIKE003')->assertJsonPath('data.0.likes_count',1);
+   ->assertJsonPath('data.0.code','LIKE003')->assertJsonPath('data.0.likes_count',1)
+   ->assertJsonPath('data.0.id',$message->uuid)->assertJsonPath('data.0.uuid',$message->uuid);
   $this->getJson('/api/v1/platform/daily-messages/category-stats')->assertOk()
    ->assertJsonPath('data.categories.0.category','family')->assertJsonPath('data.categories.0.likes_count',1);
  }
