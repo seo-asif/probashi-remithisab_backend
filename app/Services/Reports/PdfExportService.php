@@ -38,19 +38,25 @@ final class PdfExportService
                 'period'  => $period,
             ])->setPaper('a4', 'portrait');
 
-            $response = $pdf->download(
-                "probashi-{$mode}-{$period->period}.pdf"
-            );
+            // Render the bytes before declaring the request successful.
+            // A Content-Type of application/pdf alone does not prove that
+            // DomPDF returned a valid PDF document.
+            $bytes = $pdf->output();
+            if (!is_string($bytes)
+                || !str_starts_with($bytes, '%PDF-')
+                || !str_contains(substr($bytes, -2048), '%%EOF')) {
+                throw new \\RuntimeException('PDF rendering failed integrity validation.');
+            }
 
-            $response->headers->set(
-                'Cache-Control',
-                'private, no-store, no-cache, must-revalidate'
-            );
+            $filename = "probashi-{$mode}-{$period->period}.pdf";
 
-            $response->headers->set('Pragma', 'no-cache');
-            $response->headers->set('X-Content-Type-Options', 'nosniff');
-
-            return $response;
+            return response($bytes, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Cache-Control' => 'private, no-store, no-cache, must-revalidate',
+                'Pragma' => 'no-cache',
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
 
         };
 
