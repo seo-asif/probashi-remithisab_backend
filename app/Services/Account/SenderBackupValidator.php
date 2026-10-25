@@ -31,14 +31,33 @@ final class SenderBackupValidator
             'datasets.remittances.*.goal_uuid' => ['nullable', 'uuid'],
         ])->validate();
 
-        $recipientIds = array_fill_keys(array_column($data['datasets']['recipients'], 'uuid'), true);
-        $goalIds = array_fill_keys(array_column($data['datasets']['goals'], 'uuid'), true);
+        // UUIDs have one identity regardless of hexadecimal letter case.
+        // Reject duplicates before restore normalizes UUIDs for database storage.
         $errors = [];
+        foreach (['recipients', 'goals', 'remittances'] as $dataset) {
+            $seen = [];
+            foreach ($data['datasets'][$dataset] as $index => $row) {
+                $uuid = strtolower($row['uuid']);
+                if (isset($seen[$uuid])) {
+                    $errors["datasets.$dataset.$index.uuid"] = ['Duplicate record UUID.'];
+                }
+                $seen[$uuid] = true;
+            }
+        }
+
+        $recipientIds = array_fill_keys(
+            array_map('strtolower', array_column($data['datasets']['recipients'], 'uuid')),
+            true
+        );
+        $goalIds = array_fill_keys(
+            array_map('strtolower', array_column($data['datasets']['goals'], 'uuid')),
+            true
+        );
 
         foreach ($data['datasets']['remittances'] as $index => $row) {
             foreach (['recipient_uuid' => $recipientIds, 'goal_uuid' => $goalIds] as $field => $known) {
                 $uuid = $row[$field] ?? null;
-                if ($uuid !== null && !isset($known[$uuid])) {
+                if ($uuid !== null && !isset($known[strtolower($uuid)])) {
                     $errors["datasets.remittances.$index.$field"] = ['Referenced record is missing from this backup.'];
                 }
             }
