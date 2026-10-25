@@ -511,7 +511,7 @@ final class SenderBackupRestoreTest extends TestCase
         $this->actAs($business);
         for ($i = 1; $i <= 20; $i++) {
             $member = $this->recipient([
-                'name' => 'Family ' . $i,
+                'name' => 'Family ' . chr(64 + $i),
                 'phone' => null,
             ]);
             $this->deleteJson('/api/v1/sender-recipients/' . $member['id'])
