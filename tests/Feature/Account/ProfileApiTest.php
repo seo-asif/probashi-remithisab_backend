@@ -2,14 +2,13 @@
 
 namespace Tests\Feature\Account;
 
-use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Laravel\Sanctum\Sanctum;
+use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
 
 class ProfileApiTest extends TestCase
 {
-    use RefreshDatabase;
+    use RefreshDatabase, Phase3Fixtures;
 
     public function test_unauthenticated_profile_is_rejected(): void
     {
@@ -19,8 +18,7 @@ class ProfileApiTest extends TestCase
 
     public function test_profile_name_and_whatsapp_are_saved_without_changing_email(): void
     {
-        $user = User::factory()->create(['email_verified_at' => now()]);
-        Sanctum::actingAs($user);
+        $user = $this->actAs($this->makeBusiness());
 
         $this->patchJson('/api/v1/account/profile', [
             'name' => 'Updated Name',
