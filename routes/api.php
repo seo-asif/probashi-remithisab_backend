@@ -237,6 +237,7 @@ Route::prefix('v1')->group(function () {
         // ---- PDF summaries (monthly Free; other periods Unlimited)
         Route::get('/reports/sender/pdf', [PdfExportController::class, 'sender']);
         Route::get('/reports/manager/pdf', [PdfExportController::class, 'manager']);
+        Route::get('/reports/student/pdf', [PdfExportController::class, 'student']);
 
         // ---- CSV downloads (Unlimited only, verified by the controller)
         Route::get('/reports/sender/csv', [CsvExportController::class, 'sender']);
