@@ -529,6 +529,67 @@ final class SenderBackupRestoreTest extends TestCase
         $this->assertDatabaseCount('sender_recipients', 20);
     }
 
+    public function test_duplicate_phone_in_same_backup_rejects_with_row_error_and_rolls_back(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $first = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        $second = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        $response = $this->postJson(self::RESTORE, $this->backup([
+            ['uuid' => $first, 'name' => 'Mother', 'phone' => '01811111111'],
+            ['uuid' => $second, 'name' => 'Sister', 'phone' => '+8801811111111'],
+        ]))->assertStatus(422)->assertJsonPath('code', 'VALIDATION_FAILED');
+
+        $this->assertArrayHasKey('datasets.recipients.1.phone', $response->json('errors'));
+        $this->assertDatabaseCount('sender_recipients', 0);
+    }
+
+    public function test_duplicate_phone_with_existing_active_family_rejects_without_writes(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $saved = $this->recipient(['name' => 'Mother', 'phone' => '01811111111']);
+        $new = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+        $response = $this->postJson(self::RESTORE, $this->backup([
+            ['uuid' => $new, 'name' => 'Sister', 'phone' => '8801811111111'],
+        ]))->assertStatus(422);
+
+        $this->assertArrayHasKey('datasets.recipients.0.phone', $response->json('errors'));
+        $this->assertDatabaseCount('sender_recipients', 1);
+        $this->assertDatabaseHas('sender_recipients', ['uuid' => $saved['id'], 'name' => 'Mother']);
+        $this->assertDatabaseMissing('sender_recipients', ['uuid' => $new]);
+    }
+
+    public function test_deleted_family_phone_does_not_block_new_active_import(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $saved = $this->recipient(['name' => 'Mother', 'phone' => '01811111111']);
+        $this->deleteJson('/api/v1/sender-recipients/' . $saved['id'])->assertSuccessful();
+
+        $new = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        $this->postJson(self::RESTORE, $this->backup([
+            ['uuid' => $new, 'name' => 'Sister', 'phone' => '+8801811111111'],
+        ]))->assertOk()->assertJsonPath('data.datasets.recipients.created', 1);
+
+        $this->assertDatabaseCount('sender_recipients', 2);
+        $this->assertDatabaseHas('sender_recipients', ['uuid' => $new, 'name' => 'Sister']);
+    }
+
+    public function test_same_phone_in_different_owner_is_not_reported_as_duplicate(): void
+    {
+        $business = $this->makeBusiness();
+        $first = $this->actAs($business);
+        $this->recipient(['name' => 'Mother', 'phone' => '01811111111']);
+        $second = $this->actAs($business, BusinessRole::Operator);
+        $new = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+        $this->postJson(self::RESTORE, $this->backup([
+            ['uuid' => $new, 'name' => 'Sister', 'phone' => '8801811111111'],
+        ]))->assertOk()->assertJsonPath('data.datasets.recipients.created', 1);
+
+        $this->assertDatabaseCount('sender_recipients', 2);
+        $this->assertDatabaseHas('sender_recipients', ['uuid' => $new, 'owner_user_id' => $second->id]);
+    }
+
     public function test_current_account_export_can_be_imported_idempotently(): void
     {
         $this->actAs($this->makeBusiness());
