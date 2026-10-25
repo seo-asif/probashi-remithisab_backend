@@ -54,7 +54,7 @@ final class SenderBackupRestoreService
 
             $recipientIds = [];
             foreach ($backup['datasets']['recipients'] as $row) {
-                $existing = RecordId::existing(SenderRecipient::class, $row['uuid']);
+                $existing = RecordId::existing(SenderRecipient::class, strtolower($row['uuid']));
                 if ($existing !== null) {
                     $counts['recipients']['skipped_existing']++;
                     $recipientIds[strtolower($row['uuid'])] = $existing->id;
@@ -90,7 +90,7 @@ final class SenderBackupRestoreService
 
             $goalIds = [];
             foreach ($backup['datasets']['goals'] as $row) {
-                $existing = RecordId::existing(SavingsGoal::class, $row['uuid']);
+                $existing = RecordId::existing(SavingsGoal::class, strtolower($row['uuid']));
                 if ($existing !== null) {
                     $counts['goals']['skipped_existing']++;
                     $goalIds[strtolower($row['uuid'])] = $existing->id;
@@ -109,7 +109,7 @@ final class SenderBackupRestoreService
             }
 
             foreach ($backup['datasets']['remittances'] as $row) {
-                if (RecordId::existing(SenderRemittance::class, $row['uuid']) !== null) {
+                if (RecordId::existing(SenderRemittance::class, strtolower($row['uuid'])) !== null) {
                     $counts['remittances']['skipped_existing']++;
                     continue;
                 }
