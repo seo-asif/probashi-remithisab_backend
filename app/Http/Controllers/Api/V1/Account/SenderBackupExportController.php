@@ -7,12 +7,13 @@ use App\Models\SenderRecipient;
 use App\Models\SenderRemittance;
 use App\Models\SavingsGoal;
 use App\Services\Auth\AuditLogger;
+use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 final class SenderBackupExportController extends Controller
 {
-    public function __invoke(Request $request, AuditLogger $audit): JsonResponse
+    public function __invoke(Request $request, AuditLogger $audit, CurrentBusiness $current): JsonResponse
     {
         // These models enforce both the current business and the authenticated owner
         // through global scopes. Never remove those scopes for a backup.
@@ -45,7 +46,7 @@ final class SenderBackupExportController extends Controller
                 ];
             })->values()->all();
 
-        $audit->record('account.sender_backup_exported', $request->user(), null, $request->user());
+        $audit->record('account.sender_backup_exported', $request->user(), $current->id(), $request->user());
 
         return response()->json([
             'format' => 'probashi-remithisab-sender',
