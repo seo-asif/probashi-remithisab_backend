@@ -95,6 +95,35 @@ final class SenderBackupRestoreTest extends TestCase
         ]);
     }
 
+    public function test_reimport_with_uppercase_uuids_is_idempotent(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $recipientUuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        $remittanceUuid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        $backup = $this->backup(
+            [['uuid' => $recipientUuid, 'name' => 'Mother']],
+            [],
+            [$this->exampleRemittance($remittanceUuid, $recipientUuid)]
+        );
+
+        $this->postJson(self::RESTORE, $backup)->assertOk()
+            ->assertJsonPath('data.created_total', 2);
+
+        $backup['datasets']['recipients'][0]['uuid'] = strtoupper($recipientUuid);
+        $backup['datasets']['remittances'][0]['uuid'] = strtoupper($remittanceUuid);
+        $backup['datasets']['remittances'][0]['recipient_uuid'] = strtoupper($recipientUuid);
+
+        $this->postJson(self::RESTORE, $backup)->assertOk()
+            ->assertJsonPath('data.created_total', 0)
+            ->assertJsonPath('data.datasets.recipients.skipped_existing', 1)
+            ->assertJsonPath('data.datasets.remittances.skipped_existing', 1);
+        $this->assertDatabaseCount('sender_recipients', 1);
+        $this->assertDatabaseCount('sender_remittances', 1);
+        $this->assertDatabaseHas('user_monthly_usage', [
+            'sender_remittances_used' => 1,
+        ]);
+    }
+
     public function test_import_preserves_soft_deleted_recipient_goal_and_remittance(): void
     {
         $this->actAs($this->makeBusiness());
