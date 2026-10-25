@@ -58,6 +58,13 @@ final class SenderOptions
 
 // Remittance purposes
     public const PURPOSES = [
+        'family',
+        'medicine',
+        'school',
         'house',
+        'loan',
+        'eid',
+        'savings',
+        'other',
     ];
 }
