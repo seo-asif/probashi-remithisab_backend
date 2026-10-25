@@ -79,6 +79,41 @@ final class SenderBackupValidatorTest extends TestCase
         app(SenderBackupValidator::class)->validate($payload);
     }
 
+    public function test_uuid_duplicates_with_different_case_are_rejected(): void
+    {
+        $uuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        foreach (['recipients', 'goals', 'remittances'] as $dataset) {
+            $payload = $this->payload();
+            $payload['datasets'][$dataset] = [
+                ['uuid' => $uuid],
+                ['uuid' => strtoupper($uuid)],
+            ];
+
+            try {
+                app(SenderBackupValidator::class)->validate($payload);
+                $this->fail("Expected duplicate $dataset UUID to be rejected.");
+            } catch (ValidationException $e) {
+                $this->assertArrayHasKey("datasets.$dataset.1.uuid", $e->errors());
+            }
+        }
+    }
+
+    public function test_references_match_regardless_of_uuid_case(): void
+    {
+        $payload = $this->payload();
+        $recipient = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        $goal = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        $payload['datasets']['recipients'][] = ['uuid' => $recipient];
+        $payload['datasets']['goals'][] = ['uuid' => $goal];
+        $payload['datasets']['remittances'][] = [
+            'uuid' => 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            'recipient_uuid' => strtoupper($recipient),
+            'goal_uuid' => strtoupper($goal),
+        ];
+
+        $this->assertSame($payload, app(SenderBackupValidator::class)->validate($payload));
+    }
+
     public function test_missing_referenced_recipient_is_rejected(): void
     {
         $payload = $this->payload();
