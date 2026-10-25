@@ -20,7 +20,7 @@ final class PdfExportService
         $generate = function () use ($mode, $period, $business): Response {
             $clock = BusinessClock::for($business);
             $summary = match ($mode) {
-                'sender' => (new SenderReport($clock))->totals($period),
+                'sender'  => (new SenderReport($clock))->totals($period),
                 'manager' => (new ManagerReport($clock))->totals($period),
                 'student' => [
                     'timezone' => $clock->timezone(),
@@ -29,7 +29,7 @@ final class PdfExportService
                         $period->toDate ?? $clock->toLocal(now())->format('Y-m-d'),
                     )),
                 ],
-                default => throw new \InvalidArgumentException('Unsupported PDF report mode.'),
+                default   => throw new \InvalidArgumentException('Unsupported PDF report mode.'),
             };
 
             $pdf = Pdf::loadView('reports.export', [
@@ -51,10 +51,10 @@ final class PdfExportService
             $filename = "probashi-{$mode}-{$period->period}.pdf";
 
             return response($bytes, 200, [
-                'Content-Type' => 'application/pdf',
-                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-                'Cache-Control' => 'private, no-store, no-cache, must-revalidate',
-                'Pragma' => 'no-cache',
+                'Content-Type'           => 'application/pdf',
+                'Content-Disposition'    => 'attachment; filename="' . $filename . '"',
+                'Cache-Control'          => 'private, no-store, no-cache, must-revalidate',
+                'Pragma'                 => 'no-cache',
                 'X-Content-Type-Options' => 'nosniff',
             ]);
 
