@@ -20,11 +20,24 @@ final class DailyMessageAnalyticsController extends Controller {
  public function topLiked(Request $request): JsonResponse {
   $filters=$request->validate(['limit'=>['sometimes','integer','min:1','max:100'],'category'=>['sometimes',Rule::in(DailyMessageCategories::codes())]]);
   $query=DailyMessage::query()->leftJoin('daily_message_likes as likes','likes.daily_message_id','=','daily_messages.id')
-   ->select('daily_messages.uuid as id','daily_messages.uuid','daily_messages.code','daily_messages.category','daily_messages.status','daily_messages.message_bn','daily_messages.message_en')
+   ->select('daily_messages.id','daily_messages.uuid','daily_messages.code','daily_messages.category','daily_messages.status','daily_messages.message_bn','daily_messages.message_en')
    ->selectRaw('COUNT(likes.id) as likes_count')
    ->groupBy('daily_messages.id','daily_messages.uuid','daily_messages.code','daily_messages.category','daily_messages.status','daily_messages.message_bn','daily_messages.message_en');
   if(isset($filters['category'])) $query->where('daily_messages.category',$filters['category']);
-  return ApiResponse::success($query->orderByDesc('likes_count')->orderBy('daily_messages.code')->limit($filters['limit']??20)->get());
+  $messages = $query->orderByDesc('likes_count')->orderBy('daily_messages.code')
+   ->limit($filters['limit']??20)->get()->map(function (DailyMessage $message): array {
+    return [
+     'id' => $message->uuid,
+     'uuid' => $message->uuid,
+     'code' => $message->code,
+     'category' => $message->category,
+     'status' => $message->status,
+     'message_bn' => $message->message_bn,
+     'message_en' => $message->message_en,
+     'likes_count' => (int) $message->likes_count,
+    ];
+   });
+  return ApiResponse::success($messages);
  }
  public function categoryStats(): JsonResponse {
   $counts=DailyMessage::query()->leftJoin('daily_message_likes as likes','likes.daily_message_id','=','daily_messages.id')
