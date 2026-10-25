@@ -235,6 +235,15 @@ final class SenderBackupRestoreService
                 $this->invalid("datasets.remittances.$i.recipient_uuid", 'Recipient reference does not match transfer type.');
             }
 
+            // A received timestamp is meaningful only for a received transfer.
+            // Dates exported by the server use UTC database timestamp values.
+            if (!$row['received'] && !empty($row['received_at'])) {
+                $this->invalid("datasets.remittances.$i.received_at", 'An unreceived transfer cannot have a received date.');
+            }
+            if ($row['received'] && empty($row['received_at'])) {
+                $this->invalid("datasets.remittances.$i.received_at", 'A received transfer must have a received date.');
+            }
+
             $this->calculated($row, $i);
         }
     }
