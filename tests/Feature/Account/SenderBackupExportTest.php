@@ -3,6 +3,7 @@
 namespace Tests\Feature\Account;
 
 use App\Enums\BusinessRole;
+use App\Models\SenderRecipient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -41,6 +42,51 @@ final class SenderBackupExportTest extends TestCase
         $this->assertStringNotContainsString('password', $response->getContent());
         $this->assertStringNotContainsString('owner_user_id', $response->getContent());
         $this->assertStringNotContainsString('business_id', $response->getContent());
+    }
+
+    public function test_records_from_another_business_are_excluded(): void
+    {
+        $firstBusiness = $this->makeBusiness();
+        $firstUser = $this->actAs($firstBusiness);
+        $this->recipient(['name' => 'Private First Business']);
+
+        $secondBusiness = $this->makeBusiness();
+        $this->actAs($secondBusiness);
+        $this->recipient(['name' => 'Private Second Business']);
+
+        $this->login($firstUser);
+        $response = $this->get(self::URL)->assertOk()
+            ->assertJsonCount(1, 'datasets.recipients')
+            ->assertJsonPath('datasets.recipients.0.name', 'Private First Business');
+
+        $this->assertStringNotContainsString('Private Second Business', $response->getContent());
+    }
+
+    public function test_soft_deleted_recipient_is_preserved_for_future_restore(): void
+    {
+        $business = $this->makeBusiness();
+        $this->actAs($business);
+        $recipient = $this->recipient(['name' => 'Archived Family']);
+        $this->deleteJson('/api/v1/sender-recipients/' . $recipient['id'])->assertSuccessful();
+
+        $this->get(self::URL)->assertOk()
+            ->assertJsonCount(1, 'datasets.recipients')
+            ->assertJsonPath('datasets.recipients.0.name', 'Archived Family');
+
+        $this->assertNotNull(
+            SenderRecipient::withTrashed()->where('uuid', $recipient['id'])->firstOrFail()->deleted_at
+        );
+    }
+
+    public function test_export_records_a_business_scoped_audit_event(): void
+    {
+        $business = $this->makeBusiness();
+        $this->actAs($business);
+        $this->get(self::URL)->assertOk();
+        $this->assertDatabaseHas('audit_logs', [
+            'business_id' => $business->id,
+            'action' => 'account.sender_backup_exported',
+        ]);
     }
 
     public function test_export_does_not_change_data(): void
