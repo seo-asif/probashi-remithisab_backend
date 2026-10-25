@@ -102,13 +102,13 @@ final class StudentPdfExportTest extends TestCase
         ])->assertCreated();
 
         $this->postJson('/api/v1/student/expenses', [
-            'category' => 'Food', 'amount' => '25.00',
+            'category' => 'food', 'amount' => '25.00',
             'currency' => 'FJD', 'spent_on' => '2026-09-16',
         ])->assertCreated();
 
         $this->actAs($business, BusinessRole::Operator);
         $this->postJson('/api/v1/student/expenses', [
-            'category' => 'Food', 'amount' => '900.00',
+            'category' => 'food', 'amount' => '900.00',
             'currency' => 'FJD', 'spent_on' => '2026-09-16',
         ])->assertCreated();
 
@@ -123,7 +123,7 @@ final class StudentPdfExportTest extends TestCase
         $this->assertSame('100.00', $rows['FJD']['opening_balance']);
         $this->assertSame('25.00', $rows['FJD']['period_spent']);
         $this->assertSame('75.00', $rows['FJD']['remaining_as_of_to']);
-        $this->assertSame('25.00', $rows['FJD']['expense_categories']['Food']);
+        $this->assertSame('25.00', $rows['FJD']['expense_categories']['food']);
         $this->assertCount(2, $rows);
 
         $this->login($owner);
