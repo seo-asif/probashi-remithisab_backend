@@ -176,6 +176,28 @@ final class SenderBackupRestoreTest extends TestCase
         $this->assertDatabaseCount('sender_remittances', 0);
     }
 
+    public function test_rejects_received_date_without_received_status(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $row = $this->exampleRemittance();
+        $row['received'] = false;
+
+        $this->postJson(self::RESTORE, $this->backup([], [], [$row]))
+            ->assertStatus(422);
+        $this->assertDatabaseCount('sender_remittances', 0);
+    }
+
+    public function test_rejects_received_status_without_received_date(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $row = $this->exampleRemittance();
+        $row['received_at'] = null;
+
+        $this->postJson(self::RESTORE, $this->backup([], [], [$row]))
+            ->assertStatus(422);
+        $this->assertDatabaseCount('sender_remittances', 0);
+    }
+
     public function test_requires_authentication(): void
     {
         $this->postJson(self::RESTORE, $this->backup())->assertUnauthorized();
