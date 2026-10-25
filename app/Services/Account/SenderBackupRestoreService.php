@@ -53,7 +53,7 @@ final class SenderBackupRestoreService
             }
 
             $recipientIds = [];
-            foreach ($backup['datasets']['recipients'] as $row) {
+            foreach ($backup['datasets']['recipients'] as $index => $row) {
                 $existing = RecordId::existing(SenderRecipient::class, strtolower($row['uuid']));
                 if ($existing !== null) {
                     $counts['recipients']['skipped_existing']++;
@@ -67,7 +67,7 @@ final class SenderBackupRestoreService
                     $same = SenderRecipient::query()->where('phone_normalized', $key)->exists();
                     if ($same) {
                         throw ValidationException::withMessages([
-                            'datasets.recipients' => ['An active family contact number is already used.'],
+                            'datasets.recipients.' . $index . '.phone' => ['An active family contact number is already used.'],
                         ]);
                     }
                 }
