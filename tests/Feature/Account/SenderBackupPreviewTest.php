@@ -59,6 +59,21 @@ final class SenderBackupPreviewTest extends TestCase
         $this->assertDatabaseCount('sender_remittances', 0);
     }
 
+    public function test_preview_recognizes_existing_uuid_with_uppercase_letters(): void
+    {
+        $this->actAs($this->makeBusiness());
+        $saved = $this->recipient(['name' => 'Original']);
+        $uuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+        \Illuminate\Support\Facades\DB::table('sender_recipients')
+            ->where('uuid', $saved['id'])
+            ->update(['uuid' => $uuid]);
+
+        $this->postJson(self::URL, $this->backup([['uuid' => strtoupper($uuid)]]))
+            ->assertOk()
+            ->assertJsonPath('data.datasets.recipients.existing', 1)
+            ->assertJsonPath('data.datasets.recipients.new', 0);
+    }
+
     public function test_preview_does_not_count_other_users_private_records(): void
     {
         $business = $this->makeBusiness();
