@@ -139,6 +139,35 @@ class ReportTest extends TestCase
         $this->getJson('/api/v1/reports/sender?period=all')->assertJsonPath('data.times_sent', 0);
     }
 
+    public function test_sender_report_groups_purposes_using_server_bdt_and_preserves_privacy(): void
+    {
+        $business = $this->makeBusiness(['timezone' => 'Pacific/Fiji']);
+        $this->actAs($business, BusinessRole::Operator);
+
+        $this->senderRemittance(['purpose' => 'family', 'occurred_at' => '2026-09-15 10:00']);
+        $this->senderRemittance(['purpose' => 'medicine', 'occurred_at' => '2026-09-16 10:00']);
+        $this->senderRemittance(['purpose' => null, 'occurred_at' => '2026-09-17 10:00']);
+
+        $r = $this->getJson('/api/v1/reports/sender?from=2026-09-01&to=2026-09-30')
+            ->assertOk()->json('data');
+        $groups = $r['by_purpose'];
+        $this->assertSame(['family', 'medicine', 'untagged'], array_column($groups, 'purpose'));
+        $this->assertSame([1, 1, 1], array_column($groups, 'times_sent'));
+        $sum = '0.00';
+        foreach ($groups as $group) {
+            $sum = bcadd($sum, $group['family_bdt'], 2);
+        }
+        $this->assertSame($r['family_bdt'], $sum);
+
+        $month = $this->getJson('/api/v1/reports/sender/monthly?from=2026-09-01&to=2026-09-30')
+            ->assertOk()->json('data.months.0');
+        $this->assertSame($groups, $month['by_purpose']);
+
+        $this->actAs($business, BusinessRole::Owner);
+        $this->getJson('/api/v1/reports/sender?from=2026-09-01&to=2026-09-30')
+            ->assertOk()->assertJsonPath('data.by_purpose', []);
+    }
+
     public function test_sender_monthly_report_is_empty_without_records(): void
     {
         $business = $this->makeBusiness([
