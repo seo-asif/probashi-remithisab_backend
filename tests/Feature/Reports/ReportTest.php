@@ -195,18 +195,28 @@ class ReportTest extends TestCase
             ['received' => true]
         )->assertOk();
 
-        $months = $this->getJson(
+        $response = $this->getJson(
             '/api/v1/reports/sender/monthly?from=2026-09-01&to=2026-09-30'
-        )
-            ->assertOk()
-            ->json('data.months');
+        )->assertOk();
 
-        $this->assertCount(1, $months);
+        $this->assertSame('custom', $response->json('data.period'));
+        $this->assertSame('2026-09-01', $response->json('data.from'));
+        $this->assertSame('2026-09-30', $response->json('data.to'));
+
+        $months = $response->json('data.months');
+
+        $this->assertSame(
+            ['2026-09'],
+            array_column($months, 'month'),
+            json_encode($months, JSON_PRETTY_PRINT)
+        );
 
         $month = $months[0];
 
         $this->assertSame('2026-09', $month['month']);
         $this->assertSame(3, $month['times_sent']);
+        $this->assertSame(1, $month['recipient_count']);
+        $this->assertSame('1237.50', $month['incentive_bdt']);
         $this->assertSame('62737.50', $month['family_bdt']);
         $this->assertSame('25625.00', $month['confirmed_bdt']);
         $this->assertFalse($month['all_received']);
