@@ -157,6 +157,24 @@ class SenderModeTest extends TestCase
         $this->getJson("/api/v1/sender-remittances/{$old['id']}")->assertJsonPath('data.goal', null);
     }
 
+    public function test_history_and_single_record_include_business_local_datetime(): void
+    {
+        // Fiji 1 Oct 00:15 is still 30 Sep in UTC. The client must not use
+        // the phone's timezone when displaying or editing this remittance.
+        $record = $this->senderRemittance(['occurred_at' => '2026-10-01 00:15']);
+        $this->assertSame('2026-09-30T12:15:00Z', $record['occurred_at']);
+        $this->assertSame('2026-10-01T00:15:00+12:00', $record['occurred_local']);
+
+        $this->getJson('/api/v1/sender-remittances?period=all')
+            ->assertOk()
+            ->assertJsonPath('data.meta.total', 1)
+            ->assertJsonPath('data.items.0.occurred_local', '2026-10-01T00:15:00+12:00');
+
+        $this->getJson("/api/v1/sender-remittances/{$record['id']}")
+            ->assertOk()
+            ->assertJsonPath('data.occurred_local', '2026-10-01T00:15:00+12:00');
+    }
+
     public function test_copy_info_has_the_message_fields_and_nothing_secret(): void
     {
         $mother = $this->recipient();

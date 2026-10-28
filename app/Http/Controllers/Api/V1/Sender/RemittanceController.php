@@ -87,7 +87,17 @@ class RemittanceController extends Controller
 
         $page = Paging::paginate($query->orderByDesc('occurred_at')->orderByDesc('id'), $request);
 
-        return ApiResponse::success(Paging::shape($page, fn ($r) => SenderRemittanceResource::make($r)->resolve($request)));
+        $clock = BusinessClock::for($this->current->get());
+
+        return ApiResponse::success(Paging::shape(
+            $page,
+            fn ($r) => [
+                ...SenderRemittanceResource::make($r)->resolve($request),
+                // The device timezone may differ from the account business timezone.
+                // Provide the saved local wall time with its historical UTC offset.
+                'occurred_local' => $clock->localIso($r->occurred_at),
+            ],
+        ));
     }
 
     public function preview(Request $request): JsonResponse
@@ -188,6 +198,9 @@ class RemittanceController extends Controller
 
     private function answer(Request $request, SenderRemittance $r, string $message = 'OK', int $status = 200): JsonResponse
     {
-        return ApiResponse::success(SenderRemittanceResource::make($r->load(['recipient', 'goal']))->resolve($request), $message, $status);
+        return ApiResponse::success([
+            ...SenderRemittanceResource::make($r->load(['recipient', 'goal']))->resolve($request),
+            'occurred_local' => BusinessClock::for($this->current->get())->localIso($r->occurred_at),
+        ], $message, $status);
     }
 }
