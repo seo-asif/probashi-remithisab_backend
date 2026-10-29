@@ -174,7 +174,7 @@ final class SenderBackupRestoreService
             Validator::make($row, [
                 'uuid' => ['required', 'uuid'],
                 'name' => ['required', 'string', 'max:60', new \App\Rules\PersonName()],
-                'relationship' => ['nullable', Rule::in(O::RELATIONSHIPS)],
+                'relationship' => ['nullable', Rule::in([...O::RELATIONSHIPS, ...O::LEGACY_RELATIONSHIPS])],
                 'phone' => ['nullable', 'string', 'max:24'],
                 'notes' => ['nullable', 'string', 'max:100', new \App\Rules\PlainText()],
                 'archived' => ['sometimes', 'boolean'],

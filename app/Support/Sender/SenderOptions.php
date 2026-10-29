@@ -7,8 +7,23 @@ final class SenderOptions
 {
     // Family & Recipients form
     public const RELATIONSHIPS = [
-        'Mother', 'Father', 'Wife / Husband', 'Son / Daughter', 'Brother',
-        'Sister', 'Other relative', 'Friend', 'Other',
+        'Mother',
+        'Father',
+        'Wife',
+        'Husband',
+        'Son',
+        'Daughter',
+        'Brother',
+        'Sister',
+        'Other relative',
+        'Friend',
+        'Other',
+    ];
+
+    // Legacy values: retained for compatibility, not new selections.
+    public const LEGACY_RELATIONSHIPS = [
+        'Wife / Husband',
+        'Son / Daughter',
     ];
     public const NAME_MIN = 2;
     public const NAME_MAX = 20; // current prototype: maxlength 20
