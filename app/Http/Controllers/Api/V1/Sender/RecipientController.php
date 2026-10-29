@@ -10,13 +10,16 @@ use App\Models\SenderRecipient;
 use App\Services\Sender\SenderService;
 use App\Support\Api\EditGuard;
 use App\Support\Api\Paging;
+use App\Support\Sender\SenderRecipientSummary;
+use App\Support\Tenancy\CurrentBusiness;
+use App\Support\Time\BusinessClock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /** /sender-recipients (Family & Recipients). PRIVATE. ?q= name or number; no date filter (spec). */
 class RecipientController extends Controller
 {
-    public function __construct(private SenderService $service)
+    public function __construct(private SenderService $service, private SenderRecipientSummary $summaries, private CurrentBusiness $current)
     {
     }
 
@@ -50,7 +53,12 @@ class RecipientController extends Controller
 
         $page = Paging::paginate($query, $request);
 
-        return ApiResponse::success(Paging::shape($page, fn ($m) => SenderRecipientResource::make($m)->resolve($request)));
+        $summaries = $this->summaries->forRecipients($page->getCollection(), BusinessClock::for($this->current->get()));
+
+        return ApiResponse::success(Paging::shape($page, fn ($m) => [
+            ...SenderRecipientResource::make($m)->resolve($request),
+            'summary' => $summaries[$m->getKey()],
+        ]));
     }
 
     public function store(SenderRecipientRequest $request): JsonResponse
@@ -62,7 +70,13 @@ class RecipientController extends Controller
 
     public function show(Request $request, string $id): JsonResponse
     {
-        return ApiResponse::success(SenderRecipientResource::make(SenderRecipient::findByUuidOrFail($id, withTrashed: true))->resolve($request));
+        $recipient = SenderRecipient::findByUuidOrFail($id, withTrashed: true);
+        $summaries = $this->summaries->forRecipients(new \Illuminate\Database\Eloquent\Collection([$recipient]), BusinessClock::for($this->current->get()));
+
+        return ApiResponse::success([
+            ...SenderRecipientResource::make($recipient)->resolve($request),
+            'summary' => $summaries[$recipient->getKey()],
+        ]);
     }
 
     public function update(SenderRecipientRequest $request, string $id): JsonResponse
