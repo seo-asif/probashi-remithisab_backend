@@ -11,6 +11,7 @@ use App\Models\WorkBonus;
 use App\Models\WorkDay;
 use App\Models\WorkSetting;
 use App\Services\Work\WorkService;
+use App\Support\Api\Paging;
 use App\Support\Money\Dec;
 use App\Support\Reports\ReportPeriod;
 use App\Support\Tenancy\CurrentBusiness;
@@ -48,7 +49,12 @@ class WorkController extends Controller
 
     public function saveSettings(Request $request): JsonResponse
     {
-        return ApiResponse::success($this->presentSettings($this->service->saveSettings($request->only(['hourly_rate', 'currency', 'day_hours', 'ot_multiplier']))), 'Saved.');
+        return ApiResponse::success($this->presentSettings($this->service->saveSettings($request->only(['hourly_rate', 'currency', 'day_hours', 'ot_multiplier', 'effective_from']))), 'Saved.');
+    }
+
+    public function rates(): JsonResponse
+    {
+        return ApiResponse::success(['items' => $this->service->rateHistory()]);
     }
 
     // ---- days
@@ -114,16 +120,19 @@ class WorkController extends Controller
     {
         [$from, $to] = $this->range($request, required: true);
 
-        return ApiResponse::success(['from' => $from, 'to' => $to, 'currency' => $this->service->currency(), ...$this->service->periodPay($from, $to)]);
+        return ApiResponse::success(['from' => $from, 'to' => $to, ...$this->service->periodPay($from, $to)]);
     }
 
     // ---- salaries
 
-    public function salaries(): JsonResponse
+    public function salaries(Request $request): JsonResponse
     {
-        $items = Salary::query()->with('loanCut')->orderByDesc('to_date')->get()->map(fn ($s) => $this->presentSalary($s))->all();
+        $page = Paging::paginate(Salary::query()->with('loanCut')->orderByDesc('to_date')->orderByDesc('id'), $request);
 
-        return ApiResponse::success(['items' => $items, 'unpaid_days' => count($this->service->unpaidDays())]);
+        return ApiResponse::success([
+            ...Paging::shape($page, fn ($s) => $this->presentSalary($s)),
+            'unpaid_days' => count($this->service->unpaidDays()),
+        ]);
     }
 
     public function suggestSalary(): JsonResponse
@@ -133,14 +142,14 @@ class WorkController extends Controller
 
     public function storeSalary(Request $request): JsonResponse
     {
-        [$s, $created] = $this->service->saveSalary(null, $request->only(['id', 'from_date', 'to_date', 'amount_received', 'received_on', 'loan_cut', 'note']));
+        [$s, $created] = $this->service->saveSalary(null, $request->only(['id', 'from_date', 'to_date', 'amount_received', 'received_on', 'loan_cut', 'currency', 'note']));
 
         return ApiResponse::success($this->presentSalary($s), $created ? 'Saved.' : 'Already saved.', $created ? 201 : 200);
     }
 
     public function updateSalary(Request $request, string $id): JsonResponse
     {
-        [$s] = $this->service->saveSalary(Salary::findByUuidOrFail($id), $request->only(['from_date', 'to_date', 'amount_received', 'received_on', 'loan_cut', 'note']));
+        [$s] = $this->service->saveSalary(Salary::findByUuidOrFail($id), $request->only(['from_date', 'to_date', 'amount_received', 'received_on', 'loan_cut', 'currency', 'note']));
 
         return ApiResponse::success($this->presentSalary($s), 'Saved.');
     }
@@ -154,32 +163,39 @@ class WorkController extends Controller
 
     // ---- loans
 
-    public function loans(): JsonResponse
+    public function loans(Request $request): JsonResponse
     {
-        $items = LoanEntry::query()->orderBy('entry_date')->orderBy('id')->get()->map(fn ($e) => $this->presentLoan($e))->all();
+        $page = Paging::paginate(LoanEntry::query()->orderByDesc('entry_date')->orderByDesc('id'), $request);
 
-        return ApiResponse::success(['items' => $items, 'loan_left' => $this->service->loanLeft(), 'currency' => $this->service->currency()]);
+        return ApiResponse::success([
+            ...Paging::shape($page, fn ($e) => $this->presentLoan($e)),
+            'loan_left' => $this->service->loanLeft(),
+            'currency' => $this->service->currency(),
+            'by_currency' => $this->service->loanBalances(),
+        ]);
     }
 
     public function storeLoan(Request $request): JsonResponse
     {
-        [$e, $created] = $this->service->saveLoan(null, $request->only(['id', 'type', 'amount', 'entry_date', 'note']));
+        [$e, $created] = $this->service->saveLoan(null, $request->only(['id', 'type', 'amount', 'entry_date', 'currency', 'note']));
 
-        return ApiResponse::success([...$this->presentLoan($e), 'loan_left' => $this->service->loanLeft()], $created ? 'Saved.' : 'Already saved.', $created ? 201 : 200);
+        return ApiResponse::success([...$this->presentLoan($e), 'loan_left' => $this->service->loanLeft(null, $e->currency)], $created ? 'Saved.' : 'Already saved.', $created ? 201 : 200);
     }
 
     public function updateLoan(Request $request, string $id): JsonResponse
     {
-        [$e] = $this->service->saveLoan(LoanEntry::findByUuidOrFail($id), $request->only(['type', 'amount', 'entry_date', 'note']));
+        [$e] = $this->service->saveLoan(LoanEntry::findByUuidOrFail($id), $request->only(['type', 'amount', 'entry_date', 'currency', 'note']));
 
-        return ApiResponse::success([...$this->presentLoan($e), 'loan_left' => $this->service->loanLeft()], 'Saved.');
+        return ApiResponse::success([...$this->presentLoan($e), 'loan_left' => $this->service->loanLeft(null, $e->currency)], 'Saved.');
     }
 
     public function deleteLoan(string $id): JsonResponse
     {
-        $this->service->deleteLoan(LoanEntry::findByUuidOrFail($id));
+        $entry = LoanEntry::findByUuidOrFail($id);
+        $currency = $entry->currency ?? $this->service->currency();
+        $this->service->deleteLoan($entry);
 
-        return ApiResponse::success(['loan_left' => $this->service->loanLeft()], 'Deleted.');
+        return ApiResponse::success(['currency' => $currency, 'loan_left' => $this->service->loanLeft(null, $currency)], 'Deleted.');
     }
 
     // ---- spending
@@ -260,29 +276,29 @@ class WorkController extends Controller
 
     private function presentDay(WorkDay $d, ?WorkSetting $s): array
     {
-        $calc = W::day($d->kind, $d->hours, $d->amount, $s);
+        $calc = W::day($d->kind, $d->hours, $d->amount, $this->service->rateSettingsOn($d->work_date->format('Y-m-d')));
 
         return ['id' => $d->uuid, 'work_date' => $d->work_date->format('Y-m-d'), 'kind' => $d->kind, 'hours' => Dec::money($d->hours),
-            'amount' => $d->amount !== null ? Dec::money($d->amount) : null, 'note' => $d->note, ...$calc];
+            'amount' => $d->amount !== null ? Dec::money($d->amount) : null, 'currency' => $d->kind === 'work' ? $this->service->currencyOn($d->work_date->format('Y-m-d')) : ($d->currency ?? $this->service->currencyOn($d->work_date->format('Y-m-d'))), 'note' => $d->note, ...$calc];
     }
 
     private function presentBonus(WorkBonus $b): array
     {
-        return ['id' => $b->uuid, 'bonus_date' => $b->bonus_date->format('Y-m-d'), 'amount' => Dec::money($b->amount), 'note' => $b->note];
+        return ['id' => $b->uuid, 'bonus_date' => $b->bonus_date->format('Y-m-d'), 'amount' => Dec::money($b->amount), 'currency' => $b->currency ?? $this->service->currencyOn($b->bonus_date->format('Y-m-d')), 'note' => $b->note];
     }
 
     private function presentSalary(Salary $s): array
     {
         return ['id' => $s->uuid, 'from_date' => $s->from_date->format('Y-m-d'), 'to_date' => $s->to_date->format('Y-m-d'),
             'amount_received' => $s->amount_received !== null ? Dec::money($s->amount_received) : null,
-            'received_on' => $s->received_on?->format('Y-m-d'), 'note' => $s->note, ...$this->service->salarySummary($s)];
+            'received_on' => $s->received_on?->format('Y-m-d'), 'currency' => $s->currency ?? $this->service->currency(), 'note' => $s->note, ...$this->service->salarySummary($s)];
     }
 
     private function presentLoan(LoanEntry $e): array
     {
         $salary = $e->salary_id ? Salary::query()->find($e->salary_id) : null;
 
-        return ['id' => $e->uuid, 'type' => $e->type, 'amount' => Dec::money($e->amount), 'entry_date' => $e->entry_date->format('Y-m-d'), 'salary_id' => $salary?->uuid, 'note' => $e->note];
+        return ['id' => $e->uuid, 'type' => $e->type, 'amount' => Dec::money($e->amount), 'entry_date' => $e->entry_date->format('Y-m-d'), 'salary_id' => $salary?->uuid, 'currency' => $e->currency ?? $this->service->currency(), 'note' => $e->note];
     }
 
     private function presentSpending(SpendingEntry $e): array
@@ -295,10 +311,26 @@ class WorkController extends Controller
     {
         $from = $request->query('from');
         $to   = $request->query('to');
-        foreach (['from' => $from, 'to' => $to] as $f => $v) {
-            if (($v !== null || $required) && (!is_string($v) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $v))) {
-                Reject::fail([$f => ['date_invalid', 'Use a date like 2026-10-15.']]);
+        $zone = $this->current->get()->timezone;
+
+        foreach (['from' => $from, 'to' => $to] as $field => $value) {
+            if ($value === null) {
+                if ($required) {
+                    Reject::fail([$field => ['date_invalid', 'Choose a date like 2026-10-15.']]);
+                }
+
+                continue;
             }
+
+            // Validate the calendar date, not only the YYYY-MM-DD shape.
+            // Future filter bounds are valid for an empty report.
+            if ($error = \App\Support\Records\RecordTime::date($value, $zone, allowFuture: true)) {
+                Reject::fail([$field => $error]);
+            }
+        }
+
+        if ($from !== null && $to !== null && $from > $to) {
+            Reject::fail(['to' => ['date_order_invalid', 'The ending date cannot be earlier than the starting date.']]);
         }
 
         return [$from, $to];

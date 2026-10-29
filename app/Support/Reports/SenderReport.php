@@ -30,9 +30,9 @@ final class SenderReport
             $recipients[$key]['family_bdt'] = bcadd($recipients[$key]['family_bdt'], (string) $r->family_bdt, 2);
             $recipients[$key]['name'] = $r->recipient_name;
         }
-        usort($recipients, fn ($a, $b) => bccomp($b['family_bdt'], $a['family_bdt'], 2) ?: strcmp($a['name'], $b['name']));
+        usort($recipients, fn($a, $b) => bccomp($b['family_bdt'], $a['family_bdt'], 2) ?: strcmp($a['name'], $b['name']));
 
-        return [...$period->toArray(), 'timezone' => $this->clock->timezone(), ...self::summary($rows), 'by_recipient' => array_values($recipients)];
+        return [ ...$period->toArray(), 'timezone' => $this->clock->timezone(), ...self::summary($rows), 'by_recipient' => array_values($recipients)];
     }
 
     public function monthly(ReportPeriod $period): array
@@ -48,12 +48,27 @@ final class SenderReport
             $out[] = ['month' => $month, ...self::summary($rows)];
         }
 
-        return [...$period->toArray(), 'timezone' => $this->clock->timezone(), 'months' => $out];
+        return [ ...$period->toArray(), 'timezone' => $this->clock->timezone(), 'months' => $out];
     }
 
     private function rows(ReportPeriod $period): iterable
     {
-        $q = SenderRemittance::query()->select(['id', 'recipient_type', 'recipient_id', 'recipient_name', 'currency', 'amount', 'charge', 'total_cost', 'family_bdt', 'received', 'occurred_at']);
+        $q = SenderRemittance::query()->select([
+            'id',
+            'recipient_type',
+            'recipient_id',
+            'recipient_name',
+            'currency',
+            'amount',
+            'charge',
+            'total_cost',
+            'incentive_bdt',
+            'family_bdt',
+            'purpose',
+            'received',
+            'occurred_at',
+        ]);
+
         $period->apply($q, 'occurred_at');
 
         return $q->lazyById(1000);
@@ -62,16 +77,37 @@ final class SenderReport
     private static function summary(array $rows): array
     {
         $byCurrency = [];
-        $family = $confirmed = '0.00';
+        $family = $confirmed = $incentive = '0.00';
+        $familyRecipientIds = [];
+        $purposeGroups = [];
         $allReceived = true;
 
         foreach ($rows as $r) {
+            // Group exactly the stored server-calculated BDT amounts.
+            // Null/unknown purposes remain visible as Untagged.
+            $purpose = in_array($r->purpose, [
+                'family', 'medicine', 'school', 'house',
+                'loan', 'eid', 'savings', 'other',
+            ], true) ? $r->purpose : 'untagged';
+            $purposeGroups[$purpose] ??= [
+                'purpose' => $purpose, 'times_sent' => 0, 'family_bdt' => '0.00',
+            ];
+            $purposeGroups[$purpose]['times_sent']++;
+            $purposeGroups[$purpose]['family_bdt'] = bcadd(
+                $purposeGroups[$purpose]['family_bdt'], (string) $r->family_bdt, 2,
+            );
+
+            $incentive = bcadd($incentive, (string) $r->incentive_bdt, 2);
             $c = $byCurrency[$r->currency] ??= ['currency' => $r->currency, 'times_sent' => 0, 'total_sent' => '0.00', 'total_cost' => '0.00', 'bank_charges' => '0.00', 'family_bdt' => '0.00', 'confirmed_bdt' => '0.00'];
             $c['times_sent']++;
-            $c['total_sent']   = bcadd($c['total_sent'], (string) $r->amount, 2);
-            $c['total_cost']   = bcadd($c['total_cost'], (string) $r->total_cost, 2);
+            $c['total_sent'] = bcadd($c['total_sent'], (string) $r->amount, 2);
+            $c['total_cost'] = bcadd($c['total_cost'], (string) $r->total_cost, 2);
             $c['bank_charges'] = bcadd($c['bank_charges'], (string) $r->charge, 2);
-            $c['family_bdt']   = bcadd($c['family_bdt'], (string) $r->family_bdt, 2);
+            $c['family_bdt'] = bcadd($c['family_bdt'], (string) $r->family_bdt, 2);
+
+            if ($r->recipient_type === 'family' && $r->recipient_id !== null) {
+                $familyRecipientIds[(string) $r->recipient_id] = true;
+            }
             if ($r->received) {
                 $c['confirmed_bdt'] = bcadd($c['confirmed_bdt'], (string) $r->family_bdt, 2);
                 $confirmed = bcadd($confirmed, (string) $r->family_bdt, 2);
@@ -82,7 +118,20 @@ final class SenderReport
             $byCurrency[$r->currency] = $c;
         }
         ksort($byCurrency);
+        $purposeGroups = array_values($purposeGroups);
+        usort($purposeGroups, static function (array $a, array $b): int {
+            if ($a['purpose'] === 'untagged') {
+                return $b['purpose'] === 'untagged' ? 0 : 1;
+            }
+            if ($b['purpose'] === 'untagged') {
+                return -1;
+            }
 
-        return ['times_sent' => count($rows), 'family_bdt' => $family, 'confirmed_bdt' => $confirmed, 'all_received' => $rows !== [] && $allReceived, 'by_currency' => array_values($byCurrency)];
+            return bccomp($b['family_bdt'], $a['family_bdt'], 2)
+                ?: strcmp($a['purpose'], $b['purpose']);
+        });
+
+        return ['times_sent' => count($rows), 'family_bdt' => $family, 'confirmed_bdt' => $confirmed, 'all_received' => $rows !== [] && $allReceived, 'by_currency' => array_values($byCurrency), 'by_purpose' => $purposeGroups, 'recipient_count' => count($familyRecipientIds),
+            'incentive_bdt'      => $incentive];
     }
 }

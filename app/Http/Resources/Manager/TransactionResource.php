@@ -23,7 +23,7 @@ class TransactionResource extends JsonResource
             'customer'          => ['id' => $customer?->uuid, 'name' => $this->customer_name, 'phone' => $customer?->phone, 'deleted' => (bool) $customer?->trashed()],
             'currency'          => $this->currency,
             'amount'            => Dec::money($this->amount),
-            'rate'              => Dec::money($this->rate),
+            'rate'              => Dec::of($this->rate, \App\Support\Money\CurrencyRules::rateDecimals($this->currency)),
             'commission'        => Dec::money($this->commission),
             'customer_pays'     => bcadd(Dec::of($this->amount), Dec::of($this->commission), 2), // গ্রাহক মোট দেবেন
             'receive_method'    => $this->receive_method,

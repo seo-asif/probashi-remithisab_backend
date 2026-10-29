@@ -7,8 +7,23 @@ final class SenderOptions
 {
     // Family & Recipients form
     public const RELATIONSHIPS = [
-        'Mother', 'Father', 'Wife / Husband', 'Son / Daughter', 'Brother',
-        'Sister', 'Other relative', 'Friend', 'Other',
+        'Mother',
+        'Father',
+        'Wife',
+        'Husband',
+        'Son',
+        'Daughter',
+        'Brother',
+        'Sister',
+        'Other relative',
+        'Friend',
+        'Other',
+    ];
+
+    // Legacy values: retained for compatibility, not new selections.
+    public const LEGACY_RELATIONSHIPS = [
+        'Wife / Husband',
+        'Son / Daughter',
     ];
     public const NAME_MIN = 2;
     public const NAME_MAX = 20; // current prototype: maxlength 20
@@ -16,7 +31,7 @@ final class SenderOptions
     public const PHONE_REGEX = '/^\+?\d{1,18}$/'; // same rule as Operator Mode, after spaces, dashes and brackets are removed
 
     // Record a Remittance form
-      public const CURRENCIES = ['FJD', 'AUD', 'NZD', 'USD', 'SAR', 'QAR', 'AED', 'GBP', 'EUR'];
+    public const CURRENCIES = \App\Support\Money\CurrencyRules::CURRENCIES;
     public const PAYMENT_MODES = ['bKash', 'Nagad', 'Rocket', 'Bank', 'Other'];
 
     // Sender Mode limits from the current prototype.
@@ -58,6 +73,13 @@ final class SenderOptions
 
 // Remittance purposes
     public const PURPOSES = [
+        'family',
+        'medicine',
+        'school',
         'house',
+        'loan',
+        'eid',
+        'savings',
+        'other',
     ];
 }

@@ -1,5 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\V1\Account\AppSettingsController;
+use App\Http\Controllers\Api\V1\Account\ProfileController;
+use App\Http\Controllers\Api\V1\Account\SenderBackupExportController;
+use App\Http\Controllers\Api\V1\Account\SenderBackupPreviewController;
+use App\Http\Controllers\Api\V1\Account\SenderBackupRestoreController;
 use App\Http\Controllers\Api\V1\Auth\ChangePasswordController;
 use App\Http\Controllers\Api\V1\Auth\ForgotPasswordController;
 use App\Http\Controllers\Api\V1\Auth\GoogleLinkController;
@@ -25,17 +30,29 @@ use App\Http\Controllers\Api\V1\Plan\ReferralController;
 use App\Http\Controllers\Api\V1\Plan\TrialController;
 use App\Http\Controllers\Api\V1\Platform\PaymentProviderSettingController as PlatformPaymentProviderSettingController;
 use App\Http\Controllers\Api\V1\Platform\PlanPaymentController as PlatformPlanPaymentController;
+use App\Http\Controllers\Api\V1\Platform\SupportVerificationController as PlatformSupportVerificationController;
 use App\Http\Controllers\Api\V1\Reports\ReportController;
+use App\Http\Controllers\Api\V1\Reports\CsvExportController;
+use App\Http\Controllers\Api\V1\Reports\PdfExportController;
 use App\Http\Controllers\Api\V1\Sender\GoalController;
 use App\Http\Controllers\Api\V1\Sender\RecipientController;
 use App\Http\Controllers\Api\V1\Sender\RemittanceController as SenderRemittanceController;
+use App\Http\Controllers\Api\V1\Support\VerificationCodeController;
+use App\Http\Controllers\Api\V1\Support\VerifyCodeController;
+use App\Http\Controllers\Api\V1\Student\StudentController;
 use App\Http\Controllers\Api\V1\Work\WorkController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\V1\DailyMessageController;
+use App\Http\Controllers\Api\V1\DailyMessageLikeController;
+use App\Http\Controllers\Api\V1\Platform\DailyMessageAnalyticsController;
+use App\Http\Controllers\Api\V1\Platform\DailyMessageAdminController;
 
 // All routes are served under /api/v1
 Route::prefix('v1')->group(function () {
 
     Route::get('/health', HealthController::class)->middleware('throttle:60,1');
+    Route::get('/daily-message', [DailyMessageController::class, 'today'])->middleware('throttle:60,1');
+    Route::get('/daily-messages/sync', [DailyMessageController::class, 'sync'])->middleware('throttle:60,1');
 
     // ---- public: account creation, login, email verification, password reset
     Route::post('/auth/register', RegisterController::class)->middleware('throttle:auth-register');
@@ -49,19 +66,44 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/password/verify-code', VerifyResetCodeController::class)->middleware('throttle:otp-verify');
     Route::post('/auth/password/reset', ResetPasswordController::class)->middleware('throttle:otp-verify');
 
+    Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+        Route::get('/daily-messages/likes', [DailyMessageLikeController::class, 'index']);
+        Route::put('/daily-messages/{id}/like', [DailyMessageLikeController::class, 'like']);
+        Route::delete('/daily-messages/{id}/like', [DailyMessageLikeController::class, 'unlike']);
+    });
+
     // ---- logged in (any account state that holds a token)
     Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+
         Route::post('/auth/logout', LogoutController::class);
         Route::post('/auth/logout-all', LogoutAllController::class);
         Route::post('/auth/change-password', ChangePasswordController::class);
 
         Route::post('/auth/google/link', GoogleLinkController::class);
         Route::delete('/auth/google', GoogleUnlinkController::class);
+
+        Route::post(
+            '/support/verification-code',
+            VerificationCodeController::class
+        )->middleware('throttle:support-code-send');
+
+        Route::post(
+            '/support/verification-code/verify',
+            VerifyCodeController::class
+        )->middleware('throttle:support-code-verify');
     });
 
     // ---- logged in AND inside a business (verified email, active account, one active business)
     Route::middleware(['auth:sanctum', 'business.context', 'throttle:api'])->group(function () {
         Route::get('/me', MeController::class);
+        Route::get('/account/profile', [ProfileController::class, 'show']);
+        Route::get('/account/backup/sender', SenderBackupExportController::class);
+        Route::post('/account/backup/sender/preview', SenderBackupPreviewController::class);
+        Route::post('/account/backup/sender/restore', SenderBackupRestoreController::class);
+        Route::patch('/account/profile', [ProfileController::class, 'update']);
+        Route::get('/account/settings', [AppSettingsController::class, 'show']);
+        Route::patch('/account/settings', [AppSettingsController::class, 'update']);
+        Route::put('/account/settings', [AppSettingsController::class, 'update']);
 
         Route::post('/plan/trial', TrialController::class);
 
@@ -81,36 +123,39 @@ Route::prefix('v1')->group(function () {
         // ---- Remittance Manager mode (shared by everyone in the business)
         Route::controller(CustomerController::class)->group(function () {
             Route::get('/customers', 'index');
-            Route::post('/customers', 'store');
+            Route::post('/customers', 'store')->middleware('manager.write');
             Route::get('/customers/{id}', 'show');
-            Route::patch('/customers/{id}', 'update');
-            Route::delete('/customers/{id}', 'destroy');
-            Route::post('/customers/{id}/restore', 'restore');
+            Route::patch('/customers/{id}', 'update')->middleware('manager.write');
+            Route::delete('/customers/{id}', 'destroy')->middleware('manager.write');
+            Route::post('/customers/{id}/restore', 'restore')->middleware('manager.write');
+            Route::post('/customers/{id}/archive', 'archive')->middleware('manager.write');
+            Route::post('/customers/{id}/unarchive', 'unarchive')->middleware('manager.write');
+            Route::delete('/customers/{id}/delete-new', 'deleteNew')->middleware('manager.write');
         });
         Route::controller(TransactionController::class)->group(function () {
             Route::get('/manager-transactions', 'index');
-            Route::post('/manager-transactions', 'store');
+            Route::post('/manager-transactions', 'store')->middleware('manager.write');
             Route::get('/manager-transactions/{id}', 'show');
-            Route::patch('/manager-transactions/{id}', 'update');
-            Route::patch('/manager-transactions/{id}/status', 'status');
-            Route::delete('/manager-transactions/{id}', 'destroy');
-            Route::post('/manager-transactions/{id}/restore', 'restore');
-            Route::post('/manager-transactions/{id}/payments', 'addPayment');
-            Route::post('/manager-transactions/{id}/payments/{paymentId}/reverse', 'reversePayment');
+            Route::patch('/manager-transactions/{id}', 'update')->middleware('manager.write');
+            Route::patch('/manager-transactions/{id}/status', 'status')->middleware('manager.write');
+            Route::delete('/manager-transactions/{id}', 'destroy')->middleware('manager.write');
+            Route::post('/manager-transactions/{id}/restore', 'restore')->middleware('manager.write');
+            Route::post('/manager-transactions/{id}/payments', 'addPayment')->middleware('manager.write');
+            Route::post('/manager-transactions/{id}/payments/{paymentId}/reverse', 'reversePayment')->middleware('manager.write');
         });
         Route::controller(ManagerRemittanceController::class)->group(function () {
             Route::get('/manager-remittances', 'index');
-            Route::post('/manager-remittances', 'store');
+            Route::post('/manager-remittances', 'store')->middleware('manager.write');
             Route::get('/manager-remittances/{id}', 'show');
-            Route::patch('/manager-remittances/{id}', 'update');
-            Route::delete('/manager-remittances/{id}', 'destroy');
-            Route::post('/manager-remittances/{id}/restore', 'restore');
+            Route::patch('/manager-remittances/{id}', 'update')->middleware('manager.write');
+            Route::delete('/manager-remittances/{id}', 'destroy')->middleware('manager.write');
+            Route::post('/manager-remittances/{id}/restore', 'restore')->middleware('manager.write');
         });
         Route::controller(SendingNumberController::class)->group(function () {
             Route::get('/sending-numbers', 'index');
-            Route::post('/sending-numbers', 'store');
-            Route::patch('/sending-numbers/{id}', 'update');
-            Route::delete('/sending-numbers/{id}', 'destroy');
+            Route::post('/sending-numbers', 'store')->middleware('manager.write');
+            Route::patch('/sending-numbers/{id}', 'update')->middleware('manager.write');
+            Route::delete('/sending-numbers/{id}', 'destroy')->middleware('manager.write');
         });
 
         // ---- Sender mode (PRIVATE to the logged-in user)
@@ -121,10 +166,15 @@ Route::prefix('v1')->group(function () {
             Route::patch('/sender-recipients/{id}', 'update');
             Route::delete('/sender-recipients/{id}', 'destroy');
             Route::post('/sender-recipients/{id}/restore', 'restore');
+            Route::post('/sender-recipients/{id}/archive', 'archive');
+            Route::post('/sender-recipients/{id}/unarchive', 'unarchive');
+            Route::delete('/sender-recipients/{id}/delete-new', 'deleteNew');
         });
         Route::controller(SenderRemittanceController::class)->group(function () {
             Route::get('/sender-remittances', 'index');
+            Route::get('/sender-remittances/options', 'options');
             Route::post('/sender-remittances', 'store');
+            Route::post('/sender-remittances/preview', 'preview');
             Route::get('/sender-remittances/{id}', 'show');
             Route::get('/sender-remittances/{id}/copy-info', 'copyInfo');
             Route::patch('/sender-remittances/{id}', 'update');
@@ -139,9 +189,35 @@ Route::prefix('v1')->group(function () {
             Route::delete('/savings-goals/{id}', 'destroy');
         });
 
+        // ---- Student money management: private to each logged-in owner
+        Route::controller(StudentController::class)->prefix('student')->group(function () {
+            Route::get('/settings', 'settings');
+            Route::put('/settings', 'saveSettings');
+            Route::get('/opening-balances', 'openings');
+            Route::put('/opening-balances', 'saveOpening');
+            Route::delete('/opening-balances/{currency}', 'deleteOpening');
+
+            Route::get('/money-in', 'moneyIn');
+            Route::post('/money-in', 'storeMoneyIn');
+            Route::get('/money-in/{id}', 'showMoneyIn');
+            Route::patch('/money-in/{id}', 'updateMoneyIn');
+            Route::delete('/money-in/{id}', 'deleteMoneyIn');
+            Route::post('/money-in/{id}/restore', 'restoreMoneyIn');
+
+            Route::get('/expenses', 'expenses');
+            Route::post('/expenses', 'storeExpense');
+            Route::get('/expenses/{id}', 'showExpense');
+            Route::patch('/expenses/{id}', 'updateExpense');
+            Route::delete('/expenses/{id}', 'deleteExpense');
+            Route::post('/expenses/{id}/restore', 'restoreExpense');
+
+            Route::get('/summary', 'summary');
+        });
+
         // ---- worker tools (PRIVATE)
         Route::controller(WorkController::class)->prefix('work')->group(function () {
             Route::get('/settings', 'settings');
+            Route::get('/rates', 'rates');
             Route::put('/settings', 'saveSettings');
             Route::get('/days', 'days');
             Route::put('/days/{date}', 'saveDay');
@@ -167,6 +243,15 @@ Route::prefix('v1')->group(function () {
             Route::delete('/spending/{id}', 'deleteSpending');
         });
 
+        // ---- PDF summaries (monthly Free; other periods Unlimited)
+        Route::get('/reports/sender/pdf', [PdfExportController::class, 'sender']);
+        Route::get('/reports/manager/pdf', [PdfExportController::class, 'manager']);
+        Route::get('/reports/student/pdf', [PdfExportController::class, 'student']);
+
+        // ---- CSV downloads (Unlimited only, verified by the controller)
+        Route::get('/reports/sender/csv', [CsvExportController::class, 'sender']);
+        Route::get('/reports/manager/csv', [CsvExportController::class, 'manager']);
+
         // ---- reports (business timezone; deleted records never counted)
         Route::controller(ReportController::class)->prefix('reports')->group(function () {
             Route::get('/manager', 'manager');
@@ -189,6 +274,23 @@ Route::prefix('v1')->group(function () {
         'platform.admin',
         'throttle:api',
     ])->prefix('platform')->group(function () {
+        Route::get('/daily-messages/analytics', [DailyMessageAnalyticsController::class, 'summary']);
+        Route::get('/daily-messages/top-liked', [DailyMessageAnalyticsController::class, 'topLiked']);
+        Route::get('/daily-messages/category-stats', [DailyMessageAnalyticsController::class, 'categoryStats']);
+        Route::controller(DailyMessageAdminController::class)->prefix('daily-messages')->group(function () {
+            Route::get('/', 'index');
+            Route::get('/summary', 'summary');
+            Route::post('/', 'store');
+            Route::post('/import/preview', 'preview');
+            Route::post('/import', 'import');
+            Route::post('/bulk-status', 'bulkStatus');
+            Route::get('/export', 'export');
+            Route::patch('/{id}', 'update');
+            Route::delete('/{id}', 'destroy');
+        });
+
+        Route::post('/support/verify', PlatformSupportVerificationController::class)
+            ->middleware('throttle:support-code-admin-verify');
 
         Route::controller(PlatformPlanPaymentController::class)
             ->prefix('plan-payments')

@@ -25,6 +25,10 @@ class RecipientController extends Controller
         $query = SenderRecipient::query();
         if ($request->query('trashed') === 'only') {
             $query->onlyTrashed();
+        } elseif ($request->query('archived') === 'only') {
+            $query->where('archived', true);
+        } elseif ($request->query('archived') !== 'all') {
+            $query->where('archived', false);
         }
         if (is_string($q = $request->query('q')) && trim($q) !== '') {
             $like   = Paging::like($q);
@@ -37,7 +41,14 @@ class RecipientController extends Controller
             });
         }
 
-        $page = Paging::paginate($query->orderBy('name')->orderBy('id'), $request);
+        // Newest first for v1.1.290; explicit name sort remains available.
+        if ($request->query('sort') === 'name') {
+            $query->orderBy('name')->orderBy('id');
+        } else {
+            $query->orderByDesc('created_at')->orderByDesc('id');
+        }
+
+        $page = Paging::paginate($query, $request);
 
         return ApiResponse::success(Paging::shape($page, fn ($m) => SenderRecipientResource::make($m)->resolve($request)));
     }
@@ -60,6 +71,28 @@ class RecipientController extends Controller
         EditGuard::assertFresh($r, $request->input('base_updated_at'), fn ($x) => SenderRecipientResource::make($x)->resolve($request));
 
         return ApiResponse::success(SenderRecipientResource::make($this->service->updateRecipient($r, $request->validated()))->resolve($request), 'Family member updated.');
+    }
+
+    public function archive(Request $request, string $id): JsonResponse
+    {
+        $recipient = $this->service->setRecipientArchived(SenderRecipient::findByUuidOrFail($id), true);
+
+        return ApiResponse::success(SenderRecipientResource::make($recipient)->resolve($request), 'Family member archived.');
+    }
+
+    public function unarchive(Request $request, string $id): JsonResponse
+    {
+        $recipient = $this->service->setRecipientArchived(SenderRecipient::findByUuidOrFail($id), false);
+
+        return ApiResponse::success(SenderRecipientResource::make($recipient)->resolve($request), 'Family member returned to the active list.');
+    }
+
+    /** A new, unused family profile can be deleted permanently and releases its lifetime slot. */
+    public function deleteNew(string $id): JsonResponse
+    {
+        $this->service->permanentlyDeleteRecipient(SenderRecipient::findByUuidOrFail($id, withTrashed: true));
+
+        return ApiResponse::success(null, 'New family member permanently deleted.');
     }
 
     public function destroy(string $id): JsonResponse

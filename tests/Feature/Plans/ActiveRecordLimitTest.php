@@ -18,7 +18,7 @@ class ActiveRecordLimitTest extends TestCase
 {
     use Phase3Fixtures, RefreshDatabase;
 
-    public function test_family_limit_blocks_twenty_first_and_delete_frees_a_slot_but_restore_rechecks_limit(): void
+    public function test_family_limit_blocks_twenty_first_and_archive_does_not_free_quota(): void
     {
         $business = $this->makeBusiness();
         $user = $this->actAs($business);
@@ -42,15 +42,13 @@ class ActiveRecordLimitTest extends TestCase
 
         $this->postJson('/api/v1/sender-recipients', [
             'name' => 'New Family',
-        ])->assertCreated();
+        ])->assertStatus(409)
+            ->assertJsonPath('code', 'PLAN_FAMILY_LIMIT')
+            ->assertJsonPath('data.used', 20);
 
         $this->postJson(
             "/api/v1/sender-recipients/{$deleted->uuid}/restore"
-        )
-            ->assertStatus(409)
-            ->assertJsonPath('code', 'PLAN_FAMILY_LIMIT')
-            ->assertJsonPath('data.limit', 20)
-            ->assertJsonPath('data.used', 20);
+        )->assertOk();
 
         $this->getJson('/api/v1/sender-recipients')
             ->assertJsonPath('data.meta.total', 20);
@@ -90,7 +88,7 @@ class ActiveRecordLimitTest extends TestCase
             ->assertJsonPath('data.meta.total', 1);
     }
 
-    public function test_customer_limit_blocks_eleventh_and_delete_frees_a_slot_but_restore_rechecks_limit(): void
+    public function test_customer_limit_blocks_eleventh_and_archive_does_not_free_quota(): void
     {
         $business = $this->makeBusiness();
         $this->actAs($business);
@@ -114,15 +112,13 @@ class ActiveRecordLimitTest extends TestCase
 
         $this->postJson('/api/v1/customers', [
             'name' => 'New Customer',
-        ])->assertCreated();
+        ])->assertStatus(409)
+            ->assertJsonPath('code', 'PLAN_CUSTOMER_LIMIT')
+            ->assertJsonPath('data.used', 10);
 
         $this->postJson(
             "/api/v1/customers/{$deleted->uuid}/restore"
-        )
-            ->assertStatus(409)
-            ->assertJsonPath('code', 'PLAN_CUSTOMER_LIMIT')
-            ->assertJsonPath('data.limit', 10)
-            ->assertJsonPath('data.used', 10);
+        )->assertOk();
 
         $this->getJson('/api/v1/customers')
             ->assertJsonPath('data.meta.total', 10);
@@ -192,6 +188,58 @@ class ActiveRecordLimitTest extends TestCase
 
         $this->getJson('/api/v1/customers')
             ->assertJsonPath('data.meta.total', 11);
+    }
+
+    public function test_downgraded_account_keeps_over_limit_profiles_and_can_restore_them(): void
+    {
+        $business = $this->makeBusiness();
+        $user = $this->actAs($business);
+
+        $subscription = BusinessSubscription::create([
+            'business_id' => $business->id,
+            'tier' => PlanLimits::UNLIMITED,
+            'access_source' => 'manual',
+            'access_starts_at' => now()->subMinute(),
+            'access_ends_at' => now()->addDay(),
+        ]);
+
+        $family = $this->seedFamily($business, $user, 22);
+        $customers = $this->seedCustomers($business, 12);
+
+        $this->deleteJson("/api/v1/sender-recipients/{$family[0]->uuid}")
+            ->assertOk();
+        $this->deleteJson("/api/v1/customers/{$customers[0]->uuid}")
+            ->assertOk();
+
+        $subscription->forceFill([
+            'access_ends_at' => now()->subSecond(),
+        ])->save();
+
+        $this->getJson('/api/v1/me')
+            ->assertOk()
+            ->assertJsonPath('data.plan.tier', PlanLimits::FREE)
+            ->assertJsonPath('data.plan.allowances.family_members.used', 22)
+            ->assertJsonPath('data.plan.allowances.customers.used', 12);
+
+        $this->postJson('/api/v1/sender-recipients', [
+            'name' => 'Not Allowed',
+        ])->assertStatus(409)
+            ->assertJsonPath('code', 'PLAN_FAMILY_LIMIT');
+
+        $this->postJson('/api/v1/customers', [
+            'name' => 'Not Allowed',
+        ])->assertStatus(409)
+            ->assertJsonPath('code', 'PLAN_CUSTOMER_LIMIT');
+
+        $this->postJson("/api/v1/sender-recipients/{$family[0]->uuid}/restore")
+            ->assertOk();
+        $this->postJson("/api/v1/customers/{$customers[0]->uuid}/restore")
+            ->assertOk();
+
+        $this->getJson('/api/v1/sender-recipients')
+            ->assertJsonPath('data.meta.total', 22);
+        $this->getJson('/api/v1/customers')
+            ->assertJsonPath('data.meta.total', 12);
     }
 
     /**

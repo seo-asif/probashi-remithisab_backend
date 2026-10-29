@@ -74,19 +74,15 @@ final class PlanAllowanceService
             $businessUsage?->manager_transaction_bonus ?? 0
         );
 
-        $editsUsed = (int) (
-            $businessUsage?->edits_used ?? 0
-        );
-
         $familyUsed = SenderRecipient::withoutGlobalScopes()
             ->where('business_id', $business->id)
             ->where('owner_user_id', $userId)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $customersUsed = Customer::withoutGlobalScopes()
             ->where('business_id', $business->id)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $senderLimit = PlanLimits::FREE_SENDER_REMITTANCES
@@ -109,7 +105,12 @@ final class PlanAllowanceService
             ),
 
             'entitlements' => [
-                'monthly_pdf' => $unlimited,
+                // v1.1.290: monthly PDF is free; custom report dates and
+                // CSV export are Unlimited features. File creation is separate.
+                'basic_pdf' => true,
+                'monthly_pdf' => true,
+                'custom_date_range' => $unlimited,
+                'csv_export' => $unlimited,
             ],
 
             'allowances' => [
@@ -145,15 +146,6 @@ final class PlanAllowanceService
                     used: $customersUsed,
                 ),
 
-                'edits' => $this->monthlyAllowance(
-                    scope: 'business',
-                    limit: $unlimited
-                        ? null
-                        : PlanLimits::FREE_EDITS,
-                    used: $editsUsed,
-                    bonus: 0,
-                    resetsOn: $resetsOn,
-                ),
             ],
         ];
     }
@@ -178,6 +170,10 @@ final class PlanAllowanceService
         ];
     }
 
+    /**
+     * Existing API shape retained; 'used' now counts created profiles,
+     * INCLUDING archived ones, so archiving cannot replenish the cap.
+     */
     private function activeAllowance(
         string $scope,
         ?int $limit,

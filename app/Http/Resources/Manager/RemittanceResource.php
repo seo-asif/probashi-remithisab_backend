@@ -21,7 +21,7 @@ class RemittanceResource extends JsonResource
             'method'         => $this->method,
             'currency'       => $this->currency,
             'amount'         => Dec::money($this->amount),
-            'rate'           => Dec::money($this->rate),
+            'rate'           => Dec::of($this->rate, \App\Support\Money\CurrencyRules::rateDecimals($this->currency)),
             'charge'         => Dec::money($this->charge),
             'charge_type'    => $this->charge_type,
             'incentive'      => (bool) $this->incentive,
@@ -30,7 +30,7 @@ class RemittanceResource extends JsonResource
             'base_bdt'       => $calc['base_bdt'],         // breakdown only
             'incentive_bdt'  => $calc['incentive_bdt'],    // breakdown only
             'remit_bdt'      => Dec::money($this->remit_bdt),   // BDT (হিসাব অনুযায়ী)
-            'effective_rate' => bccomp($amount, '0', 2) > 0 ? Dec::round(bcdiv(Dec::of($this->remit_bdt), $amount, 8), 2) : null,
+            'effective_rate' => bccomp($amount, '0', 2) > 0 ? Dec::round(bcdiv(Dec::of($this->remit_bdt), $amount, 8), \App\Support\Money\CurrencyRules::rateDecimals($this->currency)) : null,
             'occurred_at'    => BusinessClock::utcIso($this->occurred_at),
             'timezone'       => $this->timezone,
             'notes'          => $this->notes,

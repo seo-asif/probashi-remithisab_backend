@@ -11,9 +11,12 @@ use App\Models\SenderRemittance;
 use App\Services\Sender\SenderService;
 use App\Support\Api\EditGuard;
 use App\Support\Api\Paging;
+use App\Support\Money\CurrencyRules;
 use App\Support\Money\Dec;
 use App\Support\Reports\ReportPeriod;
+use App\Support\Sender\SenderCalculator;
 use App\Support\Sender\SenderOptions;
+use App\Support\Sender\SenderValidation;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
 use App\Support\Validation\Reject;
@@ -29,6 +32,27 @@ class RemittanceController extends Controller
 {
     public function __construct(private SenderService $service, private CurrentBusiness $current)
     {
+    }
+
+    public function options(): JsonResponse
+    {
+        $currencies = [];
+        foreach (CurrencyRules::CURRENCIES as $currency) {
+            $currencies[] = [
+                'code' => $currency,
+                'amount_max' => CurrencyRules::amountMax($currency),
+                'rate_max' => CurrencyRules::rateMax($currency),
+                'rate_decimals' => CurrencyRules::rateDecimals($currency),
+            ];
+        }
+
+        return ApiResponse::success([
+            'currencies' => $currencies,
+            'methods' => SenderOptions::METHODS,
+            'charge_types' => SenderOptions::CHARGE_TYPES,
+            'purposes' => SenderOptions::PURPOSES,
+            'notes_max' => SenderOptions::NOTES_MAX,
+        ]);
     }
 
     public function index(Request $request): JsonResponse
@@ -63,7 +87,53 @@ class RemittanceController extends Controller
 
         $page = Paging::paginate($query->orderByDesc('occurred_at')->orderByDesc('id'), $request);
 
-        return ApiResponse::success(Paging::shape($page, fn ($r) => SenderRemittanceResource::make($r)->resolve($request)));
+        $clock = BusinessClock::for($this->current->get());
+
+        return ApiResponse::success(Paging::shape(
+            $page,
+            fn ($r) => [
+                ...SenderRemittanceResource::make($r)->resolve($request),
+                // The device timezone may differ from the account business timezone.
+                // Provide the saved local wall time with its historical UTC offset.
+                'occurred_local' => $clock->localIso($r->occurred_at),
+            ],
+        ));
+    }
+
+    public function preview(Request $request): JsonResponse
+    {
+        $currency = is_string($request->input('currency'))
+            ? strtoupper(trim((string) $request->input('currency')))
+            : '';
+
+        if (!CurrencyRules::supported($currency)) {
+            Reject::fail([
+                'currency' => ['currency_invalid', 'Choose a currency from the list.'],
+            ]);
+        }
+
+        $money = [
+            'amount' => $request->input('amount'),
+            'rate' => $request->input('rate'),
+            'charge' => $request->input('charge', '0'),
+            'charge_type' => $request->input('charge_type'),
+            'incentive_pct' => $request->input('incentive_pct', '0'),
+        ];
+
+        if ($errors = SenderValidation::moneyErrors($money, $currency)) {
+            Reject::fail($errors);
+        }
+
+        return ApiResponse::success([
+            'currency' => $currency,
+            ...SenderCalculator::breakdown(
+                $money['amount'],
+                $money['rate'],
+                $money['charge'],
+                (string) $money['charge_type'],
+                $money['incentive_pct'],
+            ),
+        ]);
     }
 
     public function store(SenderRemittanceRequest $request): JsonResponse
@@ -128,6 +198,9 @@ class RemittanceController extends Controller
 
     private function answer(Request $request, SenderRemittance $r, string $message = 'OK', int $status = 200): JsonResponse
     {
-        return ApiResponse::success(SenderRemittanceResource::make($r->load(['recipient', 'goal']))->resolve($request), $message, $status);
+        return ApiResponse::success([
+            ...SenderRemittanceResource::make($r->load(['recipient', 'goal']))->resolve($request),
+            'occurred_local' => BusinessClock::for($this->current->get())->localIso($r->occurred_at),
+        ], $message, $status);
     }
 }

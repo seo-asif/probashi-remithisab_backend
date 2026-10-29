@@ -24,6 +24,25 @@ class User extends Authenticatable
 
     protected $hidden = ['password', 'remember_token'];
 
+    /**
+     * Persist the public support number once after primary key allocation.
+     * It is an identifier, never an authentication credential.
+     */
+    protected static function booted(): void
+    {
+        static::created(function (self $user): void {
+            $user->forceFill([
+                'member_no' => 10000 + (int) $user->getKey(),
+            ])->saveQuietly();
+        });
+
+        static::updating(function (self $user): void {
+            if ($user->isDirty('member_no')) {
+                throw new \LogicException('Member number cannot be changed.');
+            }
+        });
+    }
+
     protected $attributes = ['status' => 'active'];
 
     protected function casts(): array

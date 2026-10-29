@@ -12,11 +12,11 @@ class Salary extends Model
 {
     use BelongsToOwner, HasPublicUuid;
 
-    protected $fillable = ['uuid', 'from_date', 'to_date', 'amount_received', 'received_on', 'note'];
+    protected $fillable = ['uuid', 'from_date', 'to_date', 'amount_received', 'received_on', 'currency', 'period_pay', 'rate_configured', 'note'];
 
     protected function casts(): array
     {
-        return ['from_date' => 'date:Y-m-d', 'to_date' => 'date:Y-m-d', 'received_on' => 'date:Y-m-d'];
+        return ['from_date' => 'date:Y-m-d', 'to_date' => 'date:Y-m-d', 'received_on' => 'date:Y-m-d', 'rate_configured' => 'boolean'];
     }
 
     public function loanCut(): HasOne

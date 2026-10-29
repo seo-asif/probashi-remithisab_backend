@@ -12,5 +12,10 @@ class SenderRecipient extends Model
 {
     use BelongsToOwner, HasPublicUuid, SoftDeletes;
 
-    protected $fillable = ['uuid', 'name', 'relationship', 'phone', 'phone_normalized', 'notes'];
+    protected $fillable = ['uuid', 'name', 'relationship', 'phone', 'phone_normalized', 'notes', 'archived', 'archived_at'];
+
+    protected function casts(): array
+    {
+        return ['archived' => 'boolean', 'archived_at' => 'datetime'];
+    }
 }

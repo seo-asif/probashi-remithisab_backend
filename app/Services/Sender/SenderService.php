@@ -11,6 +11,7 @@ use App\Support\Money\MoneyField;
 use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\MoneyAudit;
 use App\Support\Records\RecordId;
+use App\Support\Records\ProfileDeletion;
 use App\Support\Records\RecordTime;
 use App\Support\Sender\SenderCalculator;
 use App\Support\Sender\SenderOptions as O;
@@ -36,6 +37,15 @@ final class SenderService
 
     /** @return array{0: SenderRecipient, 1: bool} */
     public function createRecipient(array $data): array
+    {
+        return RecordId::withinCreationLock(
+            SenderRecipient::class,
+            $data['id'] ?? null,
+            fn (): array => $this->createRecipientUnserialized($data),
+        );
+    }
+
+    private function createRecipientUnserialized(array $data): array
     {
         if ($existing = RecordId::existing(SenderRecipient::class, $data['id'] ?? null)) {
             return [$existing, false];
@@ -89,24 +99,33 @@ final class SenderService
         }
 
         DB::transaction(function () use ($r) {
-    $business = $this->current->get();
-    $userId = $this->current->userId();
-
-    if ($business === null || $userId === null) {
-        throw new \LogicException(
-            'Family member restore requires a current business and user.'
-        );
-    }
-
-    $this->quota->assertFamilyMemberAvailable(
-        $business,
-        $userId,
-    );
-
-    $r->restore();
-});
+            // Restore reuses the existing identity and its original quota slot.
+            // It remains allowed after a paid plan expires.
+            $r->restore();
+        });
 
         return $r->refresh();
+    }
+
+    /** Archive and restore are always allowed, even when the account is over its Free limit. */
+    public function setRecipientArchived(SenderRecipient $recipient, bool $archived): SenderRecipient
+    {
+        return DB::transaction(function () use ($recipient, $archived): SenderRecipient {
+            $locked = SenderRecipient::query()->whereKey($recipient->getKey())->lockForUpdate()->firstOrFail();
+            if ((bool) $locked->archived !== $archived) {
+                $locked->forceFill([
+                    'archived' => $archived,
+                    'archived_at' => $archived ? now() : null,
+                ])->save();
+            }
+
+            return $locked->refresh();
+        });
+    }
+
+    public function permanentlyDeleteRecipient(SenderRecipient $recipient): void
+    {
+        ProfileDeletion::permanent($recipient);
     }
 
     private function recipientAttributes(array $data, bool $partial = false): array
@@ -131,6 +150,15 @@ final class SenderService
 
     /** @return array{0: SenderRemittance, 1: bool} */
     public function createRemittance(array $input): array
+    {
+        return RecordId::withinCreationLock(
+            SenderRemittance::class,
+            $input['id'] ?? null,
+            fn (): array => $this->createRemittanceUnserialized($input),
+        );
+    }
+
+    private function createRemittanceUnserialized(array $input): array
     {
         if ($existing = RecordId::existing(SenderRemittance::class, $input['id'] ?? null)) {
             return [$existing, false];
@@ -192,17 +220,6 @@ final class SenderService
             return $r->refresh();
         }
 
-        if (EditPolicy::isCounted('sender_remittance')) {
-            $business = $this->current->get();
-
-            if ($business === null) {
-                throw new \LogicException(
-                    'Sender remittance edit requires a current business.'
-                );
-            }
-
-            $this->quota->consumeEdit($business);
-        }
 
         $r->save();
 
@@ -234,22 +251,38 @@ final class SenderService
 
     public function deleteRemittance(SenderRemittance $r): void
     {
-        DB::transaction(function () use ($r) {
-            $r->delete();
-            MoneyAudit::record('deleted', $r);
+        DB::transaction(function () use ($r): void {
+            $locked = SenderRemittance::withTrashed()
+                ->whereKey($r->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($locked->trashed()) {
+                return;
+            }
+
+            $this->quota->refundSenderRemittance($locked);
+            $locked->delete();
+            MoneyAudit::record('deleted', $locked);
         });
     }
 
     public function restoreRemittance(SenderRemittance $r): SenderRemittance
     {
-        if ($r->trashed()) {
-            DB::transaction(function () use ($r) {
-                $r->restore();
-                MoneyAudit::record('restored', $r);
-            });
-        }
+        return DB::transaction(function () use ($r): SenderRemittance {
+            $locked = SenderRemittance::withTrashed()
+                ->whereKey($r->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        return $r->refresh();
+            if ($locked->trashed()) {
+                $this->quota->reapplySenderRemittance($locked);
+                $locked->restore();
+                MoneyAudit::record('restored', $locked);
+            }
+
+            return $locked->refresh();
+        });
     }
 
     /** Checks the FINAL record (stored values merged with the changes) and computes every total. */
@@ -271,7 +304,11 @@ final class SenderService
         $recipient = null;
         if ($type === O::RECIPIENT_FAMILY) {
             if (array_key_exists('recipient_id', $input) || $stored?->recipient_type !== O::RECIPIENT_FAMILY) {
-                $recipient = is_string($input['recipient_id'] ?? null) ? SenderRecipient::query()->where('uuid', $input['recipient_id'])->first() : null;
+                $recipient = is_string($input['recipient_id'] ?? null) ? SenderRecipient::query()
+                    ->where('uuid', $input['recipient_id'])
+                    ->where(fn ($q) => $q->where('archived', false)
+                        ->orWhere('id', $stored?->recipient_id ?? 0))
+                    ->first() : null;
                 if (!$recipient) {
                     $errors['recipient_id'] = ['recipient_required', 'Select a saved family member or recipient.'];
                 }
@@ -308,8 +345,12 @@ final class SenderService
             }
         }
 
-        $money = ['amount' => $pick('amount'), 'rate' => $pick('rate'), 'charge' => $pick('charge'), 'charge_type' => $pick('charge_type'), 'incentive_pct' => $pick('incentive_pct', '0')];
-        $errors += SenderValidation::moneyErrors($money);
+        $rate = $pick('rate');
+        if ($stored && !array_key_exists('rate', $input) && \App\Support\Money\CurrencyRules::supported($currency)) {
+            $rate = \App\Support\Money\CurrencyRules::storedRate($rate, $currency);
+        }
+        $money = ['amount' => $pick('amount'), 'rate' => $rate, 'charge' => $pick('charge'), 'charge_type' => $pick('charge_type'), 'incentive_pct' => $pick('incentive_pct', '0')];
+        $errors += SenderValidation::moneyErrors($money, is_string($currency) ? $currency : 'FJD');
 
         $calc = null;
         if (!array_intersect_key($errors, array_flip(['amount', 'rate', 'charge', 'charge_type', 'incentive_pct']))) {
@@ -338,7 +379,7 @@ final class SenderService
             'recipient_name' => $recipient ? $recipient->name : SenderRemittance::MYSELF_NAME,
             'currency'       => $currency,
             'amount'         => Dec::of($money['amount']),
-            'rate'           => Dec::of($money['rate']),
+            'rate'           => Dec::of($money['rate'], \App\Support\Money\CurrencyRules::rateDecimals($currency)),
             'charge'         => Dec::of($money['charge']),
             'charge_type'    => $money['charge_type'],
             'incentive_pct'  => Dec::of($money['incentive_pct']),
@@ -359,6 +400,19 @@ final class SenderService
 
     /** @return array{0: SavingsGoal, 1: bool} */
     public function saveGoal(?SavingsGoal $goal, array $input): array
+    {
+        if ($goal !== null) {
+            return $this->saveGoalUnserialized($goal, $input);
+        }
+
+        return RecordId::withinCreationLock(
+            SavingsGoal::class,
+            $input['id'] ?? null,
+            fn (): array => $this->saveGoalUnserialized(null, $input),
+        );
+    }
+
+    private function saveGoalUnserialized(?SavingsGoal $goal, array $input): array
     {
         if (!$goal && ($existing = RecordId::existing(SavingsGoal::class, $input['id'] ?? null))) {
             return [$existing, false];

@@ -3,24 +3,13 @@
 namespace App\Support\Usage;
 
 /**
- * Which edits use the shared monthly edit allowance (decision: only transactions and remittances).
- * One allowance per business, shared by Operator and Sender Mode.
+ * Detect meaningful changes for financial validation and audit logging.
+ * Free and Unlimited plans permit ordinary editing without an edit quota.
  */
 final class EditPolicy
 {
-    /** A successful edit with a real change of one of these uses one edit. */
-    public const COUNTED = ['operator_transaction', 'operator_remittance', 'sender_remittance'];
-
-    /** Never use the allowance. */
-    public const NOT_COUNTED = ['customer', 'family_member', 'payment_account', 'settings'];
-
     /** Bookkeeping fields: a change to these alone is not an edit. */
     public const IGNORED_FIELDS = ['id', 'uuid', 'client_uuid', 'base_updated_at', 'created_at', 'updated_at', 'deleted_at'];
-
-    public static function isCounted(string $recordType): bool
-    {
-        return in_array($recordType, self::COUNTED, true);
-    }
 
     /**
      * True only if at least one submitted field really differs from the stored value.

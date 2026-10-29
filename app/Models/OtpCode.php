@@ -6,8 +6,9 @@ use Illuminate\Database\Eloquent\Model;
 
 class OtpCode extends Model
 {
-    public const PURPOSE_VERIFY_EMAIL   = 'verify_email';
+    public const PURPOSE_VERIFY_EMAIL = 'verify_email';
     public const PURPOSE_PASSWORD_RESET = 'password_reset';
+    public const PURPOSE_SUPPORT_VERIFICATION = 'support_verification';
 
     protected $fillable = ['user_id', 'purpose', 'code_hash', 'attempts', 'expires_at', 'consumed_at', 'invalidated_at', 'ip'];
 

@@ -43,6 +43,57 @@ final class RecordId
         return null;
     }
 
+    /**
+     * Atomically check the client UUID and execute the complete creation.
+     *
+     * Locking the business row serializes creation attempts in this tenant:
+     * no two requests can both pass the UUID check and then perform quota
+     * consumption, ledger insertion, or audit writes independently.
+     * The callback MUST return [record, true] from within this transaction.
+     *
+     * @template T of Model
+     * @param class-string<T> $model
+     * @param callable(): array{0:T, 1:bool} $create
+     * @param (callable(T): bool)|null $acceptExisting
+     * @return array{0:T, 1:bool}
+     */
+    public static function withinCreationLock(
+        string $model,
+        mixed $id,
+        callable $create,
+        ?callable $acceptExisting = null,
+    ): array {
+        $businessId = app(\App\Support\Tenancy\CurrentBusiness::class)->id();
+
+        if ($businessId === null) {
+            throw new \LogicException('Creating financial records requires a business context.');
+        }
+
+        return \Illuminate\Support\Facades\DB::transaction(
+            function () use ($model, $id, $create, $acceptExisting, $businessId): array {
+                \App\Models\Business::query()
+                    ->whereKey($businessId)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $existing = self::existing($model, $id);
+                if ($existing !== null) {
+                    if ($acceptExisting !== null && !$acceptExisting($existing)) {
+                        Reject::fail(['id' => [
+                            'id_taken',
+                            'This record id already belongs to a different record.',
+                        ]]);
+                    }
+
+                    return [$existing, false];
+                }
+
+                return $create();
+            },
+            3,
+        );
+    }
+
     public static function make(mixed $id): string
     {
         return is_string($id) && Str::isUuid($id) ? strtolower($id) : (string) Str::uuid7();

@@ -161,9 +161,10 @@ final class SenderValidation
      *
      * @return array<string, array{0: string, 1: string}>
      */
-    public static function moneyErrors(array $money): array
+    public static function moneyErrors(array $money, string $currency = 'FJD'): array
     {
         $errors = [];
+        $limitsCurrency = \App\Support\Money\CurrencyRules::supported($currency) ? $currency : 'FJD';
 
         $amount = $money['amount'] ?? null;
         $rate = $money['rate'] ?? null;
@@ -176,17 +177,18 @@ final class SenderValidation
             $amount,
             'amount',
             'an amount',
-            SenderOptions::AMOUNT_MAX
+            \App\Support\Money\CurrencyRules::amountMax($limitsCurrency)
         )) {
             $errors['amount'] = $error;
         }
 
-        // Exchange rate: positive, maximum 2 decimals.
+        // Exchange rate: four decimals for KRW/JPY, two for other currencies.
         if ($error = MoneyField::check(
             $rate,
             'rate',
             'an exchange rate',
-            SenderOptions::RATE_MAX
+            \App\Support\Money\CurrencyRules::rateMax($limitsCurrency),
+            decimals: \App\Support\Money\CurrencyRules::rateDecimals($limitsCurrency)
         )) {
             $errors['rate'] = $error;
         }

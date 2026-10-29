@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Sender;
 
+use App\Models\SenderRecipient;
 use App\Rules\PersonName;
 use App\Rules\PlainText;
 use App\Rules\UniqueFamilyPhone;
@@ -33,6 +34,26 @@ class SenderRecipientRequest extends FormRequest
         $current = app(CurrentBusiness::class);
         $rules   = self::ruleSet(!$this->isMethod('post'));
         $rules['phone'][] = new UniqueFamilyPhone((int) $current->id(), (int) $current->userId(), $this->route('id') ? (string) $this->route('id') : null);
+
+        if (!$this->isMethod('post') && $this->exists('relationship')) {
+            $relationship = $this->input('relationship');
+
+            if (is_string($relationship)
+                && in_array($relationship, SenderOptions::LEGACY_RELATIONSHIPS, true)) {
+                $recipient = SenderRecipient::findByUuidOrFail($this->route('id'));
+
+                if ($recipient->relationship === $relationship) {
+                    $rules['relationship'] = [
+                        'sometimes',
+                        'nullable',
+                        Rule::in([
+                            ...SenderOptions::RELATIONSHIPS,
+                            $relationship,
+                        ]),
+                    ];
+                }
+            }
+        }
 
         return $rules;
     }

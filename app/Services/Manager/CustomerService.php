@@ -9,6 +9,7 @@ use App\Models\ManagerTransaction;
 use App\Support\Manager\ManagerOptions;
 use App\Support\Plans\PlanQuotaService;
 use App\Support\Records\RecordId;
+use App\Support\Records\ProfileDeletion;
 use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
@@ -123,15 +124,12 @@ final class CustomerService
         return $customer->refresh();
     }
 
-    /** The app's rule: a customer with records cannot be deleted. Delete the records first. */
+    /**
+     * Archive a customer without deleting linked transaction history.
+     * Archiving never frees a Free customer-creation allowance.
+     */
     public function delete(Customer $customer): void
     {
-        $count = ManagerTransaction::query()->where('customer_id', $customer->id)->count();
-
-        if ($count > 0) {
-            throw new ApiException('CUSTOMER_HAS_RECORDS', "This customer has {$count} record" . ($count > 1 ? 's' : '') . '. Delete those records first.', 409, ['records' => $count]);
-        }
-
         $customer->delete();
     }
 
@@ -148,23 +146,35 @@ final class CustomerService
             );
         }
 
-       DB::transaction(function () use ($customer) {
-    $business = $this->current->get();
-
-    if ($business === null) {
-        throw new \LogicException(
-            'Customer restore requires a current business.'
-        );
-    }
-
-    $this->quota->assertCustomerAvailable($business);
-
-    $customer->restore();
-
-    $this->identifierLookup->sync($customer);
-});
+        DB::transaction(function () use ($customer) {
+            // Restoration is not creation: the profile occupied its original
+            // lifetime allowance even while archived, including after downgrade.
+            $customer->restore();
+            $this->identifierLookup->sync($customer);
+        });
 
         return $customer->refresh();
+    }
+
+    /** Archiving hides a customer from pickers without deleting their financial history. */
+    public function setArchived(Customer $customer, bool $archived): Customer
+    {
+        return DB::transaction(function () use ($customer, $archived): Customer {
+            $locked = Customer::query()->whereKey($customer->getKey())->lockForUpdate()->firstOrFail();
+            if ((bool) $locked->archived !== $archived) {
+                $locked->forceFill([
+                    'archived' => $archived,
+                    'archived_at' => $archived ? now() : null,
+                ])->save();
+            }
+
+            return $locked->refresh();
+        });
+    }
+
+    public function permanentlyDelete(Customer $customer): void
+    {
+        ProfileDeletion::permanent($customer);
     }
 
     private function assertNoActiveDuplicate(

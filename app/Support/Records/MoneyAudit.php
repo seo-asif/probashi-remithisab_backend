@@ -30,6 +30,16 @@ final class MoneyAudit
         'phone',
         'phone_normalized',
         'phone_key',
+        // Do not duplicate personal names from private financial records
+        // in broad audit metadata. The record UUID remains available.
+        'name',
+        'from_name',
+        'recipient_name',
+        'customer_name',
+        'account_name',
+        'owner_name',
+        'beneficiary_name',
+        'holder_name',
         'address',
         'notes',
         'note',
@@ -87,6 +97,12 @@ final class MoneyAudit
 
         foreach ($record->getAttributes() as $key => $value) {
             $cast = $record->getAttribute($key);
+
+            // DECIMAL(10,4) hydrates 52.00 as 52.0000. Keep historical
+            // two-decimal audit snapshots stable while retaining KRW/JPY precision.
+            if ($key === 'rate' && is_string($record->getAttribute('currency'))) {
+                $cast = \App\Support\Money\CurrencyRules::storedRate($cast, $record->getAttribute('currency'));
+            }
 
             $out[$key] = $cast instanceof \DateTimeInterface
             ? $cast->format('Y-m-d\TH:i:s\Z')

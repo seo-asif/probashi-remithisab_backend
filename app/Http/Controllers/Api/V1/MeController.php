@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\BusinessResource;
 use App\Http\Resources\UserResource;
 use App\Http\Responses\ApiResponse;
+use App\Services\Account\AppSettingsService;
 use App\Support\Plans\PlanAllowanceService;
 use App\Support\Tenancy\CurrentBusiness;
 use App\Support\Time\BusinessClock;
@@ -25,6 +26,7 @@ class MeController extends Controller
 
         return ApiResponse::success([
             'user'       => UserResource::make($request->user())->resolve($request),
+            'app_settings' => app(AppSettingsService::class)->snapshot($request->user(), $business),
             'business'   => BusinessResource::make($business)->resolve($request),
 
             'membership' => [

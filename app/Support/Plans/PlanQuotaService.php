@@ -7,6 +7,8 @@ use App\Models\Business;
 use App\Models\BusinessMonthlyUsage;
 use App\Models\BusinessSubscription;
 use App\Models\Customer;
+use App\Models\ManagerTransaction;
+use App\Models\SenderRemittance;
 use App\Models\SenderRecipient;
 use App\Models\UserMonthlyUsage;
 use App\Support\Time\BusinessClock;
@@ -113,49 +115,6 @@ final class PlanQuotaService
     }
 
     /**
-     * Consume one shared monthly edit.
-     *
-     * Sender and Manager use this same business-scoped counter.
-     */
-    public function consumeEdit(
-        Business $business,
-        ?DateTimeInterface $at = null,
-    ): BusinessMonthlyUsage {
-        $this->requireTransaction();
-
-        $business = $this->lockBusiness($business);
-        $at = $this->instant($at);
-        $periodStart = $this->periodStart($business, $at);
-
-        $usage = $this->lockBusinessUsage(
-            $business->id,
-            $periodStart,
-        );
-
-        $tier = $this->effectiveTier($business, $at);
-        $limit = PlanLimits::FREE_EDITS;
-
-        if (
-            $tier !== PlanLimits::UNLIMITED
-            && $usage->edits_used >= $limit
-        ) {
-            $this->limitReached(
-                'PLAN_EDIT_LIMIT',
-                'Your monthly edit limit has been reached.',
-                $limit,
-                $usage->edits_used,
-                $tier,
-                $business,
-                $at,
-            );
-        }
-
-        $usage->increment('edits_used');
-
-        return $usage->refresh();
-    }
-
-    /**
      * Calendar-month key stored in the database.
      *
      * The instant is converted to the BUSINESS timezone first.
@@ -164,8 +123,8 @@ final class PlanQuotaService
 /**
  * Check whether this user may have one more active family member.
  *
- * This is an active-record cap, not a monthly counter.
- * Soft-deleted family members do not consume a slot.
+ * This is a lifetime-created-profile cap, not a monthly counter.
+ * Archived (soft-deleted) profiles still consume the original slot.
  */
     public function assertFamilyMemberAvailable(
         Business $business,
@@ -185,7 +144,7 @@ final class PlanQuotaService
         $used = SenderRecipient::withoutGlobalScopes()
             ->where('business_id', $business->id)
             ->where('owner_user_id', $userId)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $limit = PlanLimits::FREE_FAMILY_MEMBERS;
@@ -193,7 +152,7 @@ final class PlanQuotaService
         if ($used >= $limit) {
             $this->activeLimitReached(
                 'PLAN_FAMILY_LIMIT',
-                'Your active family member limit has been reached.',
+                'Your Free family profile creation limit has been reached.',
                 $limit,
                 $used,
                 $tier,
@@ -204,8 +163,8 @@ final class PlanQuotaService
 /**
  * Check whether this business may have one more active Manager customer.
  *
- * This is an active-record cap, not a monthly counter.
- * Soft-deleted customers do not consume a slot.
+ * This is a lifetime-created-profile cap, not a monthly counter.
+ * Archived (soft-deleted) profiles still consume the original slot.
  */
     public function assertCustomerAvailable(
         Business $business,
@@ -223,7 +182,7 @@ final class PlanQuotaService
 
         $used = Customer::withoutGlobalScopes()
             ->where('business_id', $business->id)
-            ->whereNull('deleted_at')
+            ->withTrashed()
             ->count();
 
         $limit = PlanLimits::FREE_CUSTOMERS;
@@ -231,12 +190,162 @@ final class PlanQuotaService
         if ($used >= $limit) {
             $this->activeLimitReached(
                 'PLAN_CUSTOMER_LIMIT',
-                'Your active customer limit has been reached.',
+                'Your Free customer profile creation limit has been reached.',
                 $limit,
                 $used,
                 $tier,
             );
         }
+    }
+
+    /**
+     * Refund an eligible Sender remittance in its ORIGINAL business-local month.
+     * The record is locked by the caller; the marker and counter change together.
+     * A record can be refunded at most once throughout its lifetime.
+     */
+    public function refundSenderRemittance(SenderRemittance $record): void
+    {
+        $this->requireTransaction();
+
+        if (!$this->withinRefundWindow($record)) {
+            return;
+        }
+
+        $business = $this->lockBusiness(
+            Business::query()->findOrFail($record->business_id)
+        );
+        $period = $this->periodStart($business, $record->created_at);
+        $usage = UserMonthlyUsage::query()
+            ->where('business_id', $business->id)
+            ->where('user_id', $record->owner_user_id)
+            ->where('period_start', $period)
+            ->lockForUpdate()
+            ->first();
+
+        // Legacy or inconsistent missing usage must never become negative.
+        if ($usage === null || $usage->sender_remittances_used < 1) {
+            return;
+        }
+
+        $usage->decrement('sender_remittances_used');
+        $record->forceFill(['quota_refunded_at' => now()])->save();
+    }
+
+    /**
+     * A restored, previously refunded remittance reclaims its original slot.
+     * Restoration may fail if the original month has since reached its Free cap.
+     * Do not charge the current month merely because restore happens later.
+     */
+    public function reapplySenderRemittance(SenderRemittance $record): void
+    {
+        $this->requireTransaction();
+
+        if (!$this->needsReapply($record)) {
+            return;
+        }
+
+        $business = $this->lockBusiness(
+            Business::query()->findOrFail($record->business_id)
+        );
+        $at = $this->instant(null);
+        $period = $this->periodStart($business, $record->created_at);
+        $usage = $this->lockUserUsage($business->id, $record->owner_user_id, $period);
+
+        $tier = $this->effectiveTier($business, $at);
+        $limit = PlanLimits::FREE_SENDER_REMITTANCES + $usage->sender_remittance_bonus;
+        if ($tier !== PlanLimits::UNLIMITED && $usage->sender_remittances_used >= $limit) {
+            $this->limitReached(
+                'PLAN_SENDER_MONTHLY_LIMIT',
+                'Cannot restore: the original Sender monthly allowance is full.',
+                $limit,
+                $usage->sender_remittances_used,
+                $tier,
+                $business,
+                $record->created_at,
+            );
+        }
+
+        $usage->increment('sender_remittances_used');
+        $record->forceFill(['quota_refund_reapplied_at' => now()])->save();
+    }
+
+    /** Refund a Manager transaction in its original business-local month. */
+    public function refundManagerTransaction(ManagerTransaction $record): void
+    {
+        $this->requireTransaction();
+
+        if (!$this->withinRefundWindow($record)) {
+            return;
+        }
+
+        $business = $this->lockBusiness(
+            Business::query()->findOrFail($record->business_id)
+        );
+        $period = $this->periodStart($business, $record->created_at);
+        $usage = BusinessMonthlyUsage::query()
+            ->where('business_id', $business->id)
+            ->where('period_start', $period)
+            ->lockForUpdate()
+            ->first();
+
+        if ($usage === null || $usage->manager_transactions_used < 1) {
+            return;
+        }
+
+        $usage->decrement('manager_transactions_used');
+        $record->forceFill(['quota_refunded_at' => now()])->save();
+    }
+
+    /** Reverse the prior Manager refund before restoring a transaction. */
+    public function reapplyManagerTransaction(ManagerTransaction $record): void
+    {
+        $this->requireTransaction();
+
+        if (!$this->needsReapply($record)) {
+            return;
+        }
+
+        $business = $this->lockBusiness(
+            Business::query()->findOrFail($record->business_id)
+        );
+        $at = $this->instant(null);
+        $period = $this->periodStart($business, $record->created_at);
+        $usage = $this->lockBusinessUsage($business->id, $period);
+
+        $tier = $this->effectiveTier($business, $at);
+        $limit = PlanLimits::FREE_MANAGER_TRANSACTIONS + $usage->manager_transaction_bonus;
+        if ($tier !== PlanLimits::UNLIMITED && $usage->manager_transactions_used >= $limit) {
+            $this->limitReached(
+                'PLAN_MANAGER_MONTHLY_LIMIT',
+                'Cannot restore: the original Manager monthly allowance is full.',
+                $limit,
+                $usage->manager_transactions_used,
+                $tier,
+                $business,
+                $record->created_at,
+            );
+        }
+
+        $usage->increment('manager_transactions_used');
+        $record->forceFill(['quota_refund_reapplied_at' => now()])->save();
+    }
+
+    private function withinRefundWindow(SenderRemittance|ManagerTransaction $record): bool
+    {
+        if ($record->quota_refunded_at !== null || $record->created_at === null) {
+            return false;
+        }
+
+        $now = now();
+
+        return $now->greaterThanOrEqualTo($record->created_at)
+            && $now->lessThanOrEqualTo($record->created_at->copy()->addSeconds(600));
+    }
+
+    private function needsReapply(SenderRemittance|ManagerTransaction $record): bool
+    {
+        return $record->quota_refunded_at !== null
+            && $record->quota_refund_reapplied_at === null;
     }
 
     public function periodStart(

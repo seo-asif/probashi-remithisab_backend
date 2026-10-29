@@ -139,6 +139,35 @@ class ReportTest extends TestCase
         $this->getJson('/api/v1/reports/sender?period=all')->assertJsonPath('data.times_sent', 0);
     }
 
+    public function test_sender_report_groups_purposes_using_server_bdt_and_preserves_privacy(): void
+    {
+        $business = $this->makeBusiness(['timezone' => 'Pacific/Fiji']);
+        $this->actAs($business, BusinessRole::Operator);
+
+        $this->senderRemittance(['purpose' => 'family', 'occurred_at' => '2026-09-15 10:00']);
+        $this->senderRemittance(['purpose' => 'medicine', 'occurred_at' => '2026-09-16 10:00']);
+        $this->senderRemittance(['purpose' => null, 'occurred_at' => '2026-09-17 10:00']);
+
+        $r = $this->getJson('/api/v1/reports/sender?from=2026-09-01&to=2026-09-30')
+            ->assertOk()->json('data');
+        $groups = $r['by_purpose'];
+        $this->assertSame(['family', 'medicine', 'untagged'], array_column($groups, 'purpose'));
+        $this->assertSame([1, 1, 1], array_column($groups, 'times_sent'));
+        $sum = '0.00';
+        foreach ($groups as $group) {
+            $sum = bcadd($sum, $group['family_bdt'], 2);
+        }
+        $this->assertSame($r['family_bdt'], $sum);
+
+        $month = $this->getJson('/api/v1/reports/sender/monthly?from=2026-09-01&to=2026-09-30')
+            ->assertOk()->json('data.months.0');
+        $this->assertSame($groups, $month['by_purpose']);
+
+        $this->actAs($business, BusinessRole::Owner);
+        $this->getJson('/api/v1/reports/sender?from=2026-09-01&to=2026-09-30')
+            ->assertOk()->assertJsonPath('data.by_purpose', []);
+    }
+
     public function test_sender_monthly_report_is_empty_without_records(): void
     {
         $business = $this->makeBusiness([
@@ -195,18 +224,28 @@ class ReportTest extends TestCase
             ['received' => true]
         )->assertOk();
 
-        $months = $this->getJson(
+        $response = $this->getJson(
             '/api/v1/reports/sender/monthly?from=2026-09-01&to=2026-09-30'
-        )
-            ->assertOk()
-            ->json('data.months');
+        )->assertOk();
 
-        $this->assertCount(1, $months);
+        $this->assertSame('custom', $response->json('data.period'));
+        $this->assertSame('2026-09-01', $response->json('data.from'));
+        $this->assertSame('2026-09-30', $response->json('data.to'));
+
+        $months = $response->json('data.months');
+
+        $this->assertSame(
+            ['2026-09'],
+            array_column($months, 'month'),
+            json_encode($months, JSON_PRETTY_PRINT)
+        );
 
         $month = $months[0];
 
         $this->assertSame('2026-09', $month['month']);
         $this->assertSame(3, $month['times_sent']);
+        $this->assertSame(1, $month['recipient_count']);
+        $this->assertSame('1237.50', $month['incentive_bdt']);
         $this->assertSame('62737.50', $month['family_bdt']);
         $this->assertSame('25625.00', $month['confirmed_bdt']);
         $this->assertFalse($month['all_received']);

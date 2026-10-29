@@ -40,6 +40,10 @@ class CustomerController extends Controller
 
         if ($request->query('trashed') === 'only') {
             $query->onlyTrashed();
+        } elseif ($request->query('archived') === 'only') {
+            $query->where('archived', true);
+        } elseif ($request->query('archived') !== 'all') {
+            $query->where('archived', false);
         }
 
         if (is_string($q = $request->query('q')) && trim($q) !== '') {
@@ -121,7 +125,7 @@ class CustomerController extends Controller
 
         $request->query('sort') === 'name'
         ? $query->orderBy('name')->orderBy('id')
-        : $query->orderByDesc('updated_at')->orderByDesc('id');
+        : $query->orderByDesc('created_at')->orderByDesc('id');
 
         $page = Paging::paginate($query, $request);
 
@@ -172,6 +176,28 @@ class CustomerController extends Controller
         $customer = $this->service->restore(Customer::findByUuidOrFail($id, withTrashed: true));
 
         return ApiResponse::success(CustomerResource::make($customer)->resolve($request), 'Customer restored.');
+    }
+
+    public function archive(Request $request, string $id): JsonResponse
+    {
+        $customer = $this->service->setArchived(Customer::findByUuidOrFail($id), true);
+
+        return ApiResponse::success(CustomerResource::make($customer)->resolve($request), 'Customer archived.');
+    }
+
+    public function unarchive(Request $request, string $id): JsonResponse
+    {
+        $customer = $this->service->setArchived(Customer::findByUuidOrFail($id), false);
+
+        return ApiResponse::success(CustomerResource::make($customer)->resolve($request), 'Customer returned to the active list.');
+    }
+
+    /** A new, unused profile can be deleted permanently and releases its lifetime slot. */
+    public function deleteNew(string $id): JsonResponse
+    {
+        $this->service->permanentlyDelete(Customer::findByUuidOrFail($id, withTrashed: true));
+
+        return ApiResponse::success(null, 'New customer permanently deleted.');
     }
 
     /** Totals of the customer's active transactions, per currency (amounts in different currencies are never added). */
