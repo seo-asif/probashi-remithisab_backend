@@ -1,10 +1,12 @@
 <?php
 
+
 namespace Tests\Feature;
 
 use App\Enums\BusinessRole;
 use App\Enums\PlanPaymentStatus;
 use App\Models\BusinessSubscription;
+use App\Models\SenderSubscription;
 use App\Models\PlanPaymentRequest;
 use App\Models\PlatformAdmin;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -32,6 +34,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'OWNER00001',
             'payer_number'   => '01712345678',
@@ -73,6 +76,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 3,
             'trx_id'         => 'ADMIN00001',
             'payer_number'   => '01812345678',
@@ -115,6 +119,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 6,
             'trx_id'         => 'LIST000001',
             'payer_number'   => '01912345678',
@@ -147,7 +152,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         $this->assertNotNull($payment);
 
         $this->assertSame(
-            'unlimited',
+            'sender_plus',
             $payment['product'],
         );
 
@@ -157,7 +162,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         );
 
         $this->assertSame(
-            2790,
+            594,
             $payment['amount_bdt'],
         );
 
@@ -177,7 +182,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         );
     }
 
-    public function test_platform_admin_can_approve_payment_and_activate_unlimited(): void
+    public function test_platform_admin_can_approve_payment_and_activate_sender_plus(): void
     {
         [$business, $owner] = $this->makeAuthorizedMember(
             BusinessRole::Owner,
@@ -186,6 +191,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 12,
             'trx_id'         => 'APPROVE001',
             'payer_number'   => '01612345678',
@@ -214,7 +220,7 @@ class PlatformPlanPaymentApiTest extends TestCase
             )
             ->assertJsonPath(
                 'data.amount_bdt',
-                5200,
+                1188,
             );
 
         $payment = PlanPaymentRequest::query()
@@ -239,12 +245,12 @@ class PlatformPlanPaymentApiTest extends TestCase
             $payment->applied_at,
         );
 
-        $subscription = BusinessSubscription::query()
-            ->where('business_id', $business->id)
+        $subscription = SenderSubscription::query()
+            ->where('user_id', $owner->id)
             ->firstOrFail();
 
         $this->assertSame(
-            'unlimited',
+            'plus',
             $subscription->tier,
         );
 
@@ -263,6 +269,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'RETRY00001',
             'payer_number'   => '01512345678',
@@ -284,16 +291,16 @@ class PlatformPlanPaymentApiTest extends TestCase
         $this->postJson($url)
             ->assertOk();
 
-        $firstExpiry = BusinessSubscription::query()
-            ->where('business_id', $business->id)
+        $firstExpiry = SenderSubscription::query()
+            ->where('user_id', $owner->id)
             ->firstOrFail()
             ->access_ends_at;
 
         $this->postJson($url)
             ->assertOk();
 
-        $secondExpiry = BusinessSubscription::query()
-            ->where('business_id', $business->id)
+        $secondExpiry = SenderSubscription::query()
+            ->where('user_id', $owner->id)
             ->firstOrFail()
             ->access_ends_at;
 
@@ -311,6 +318,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'REJECT0001',
             'payer_number'   => '01312345678',
@@ -372,6 +380,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'REASON0001',
             'payer_number'   => '01712345678',
@@ -415,6 +424,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'UUID000001',
             'payer_number'   => '01712345678',
@@ -449,6 +459,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'SPOOF00001',
             'payer_number'   => '01712345678',
@@ -529,6 +540,7 @@ class PlatformPlanPaymentApiTest extends TestCase
         Sanctum::actingAs($owner);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'DENY000001',
             'payer_number'   => '01712345678',

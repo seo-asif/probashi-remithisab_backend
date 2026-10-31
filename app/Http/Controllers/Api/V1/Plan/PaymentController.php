@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1\Plan;
 
 use App\Enums\BusinessRole;
+use App\Enums\PlanPaymentProduct;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Plan\PaymentRequestResource;
@@ -11,7 +12,7 @@ use App\Models\PlanPaymentRequest;
 use App\Support\Api\Paging;
 use App\Support\Plans\PaymentOptionsService;
 use App\Support\Plans\PaymentRequestService;
-use App\Support\Plans\PlanPackages;
+use App\Support\Plans\IndependentPlanPackages;
 use App\Support\Tenancy\CurrentBusiness;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -95,10 +96,11 @@ final class PaymentController extends Controller
         $this->assertCanManagePayments($membership->role);
 
         $data = $request->validate([
+            'product' => ['required', 'string', Rule::in(['sender_plus', 'manager_pro'])],
             'package_months' => [
                 'required',
                 'integer',
-                Rule::in(PlanPackages::months()),
+                Rule::in(IndependentPlanPackages::months()),
             ],
             'trx_id'         => [
                 'required',
@@ -112,9 +114,10 @@ final class PaymentController extends Controller
             ],
         ]);
 
-        $payment = $payments->createUnlimited(
+        $payment = $payments->createIndependent(
             $business,
             $user,
+            PlanPaymentProduct::from($data['product']),
             (int) $data['package_months'],
             $data['trx_id'],
             $data['payer_number'],

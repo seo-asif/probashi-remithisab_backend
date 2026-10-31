@@ -24,6 +24,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $response = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 3,
             'trx_id'         => '9jk4m7xq2p',
             'payer_number'   => '01712345678',
@@ -33,9 +34,9 @@ class PaymentApiTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('success', true)
             ->assertJsonPath('code', 'OK')
-            ->assertJsonPath('data.product', 'unlimited')
+            ->assertJsonPath('data.product', 'sender_plus')
             ->assertJsonPath('data.package_months', 3)
-            ->assertJsonPath('data.amount_bdt', 1490)
+            ->assertJsonPath('data.amount_bdt', 297)
             ->assertJsonPath('data.trx_id', '9JK4M7XQ2P')
             ->assertJsonPath('data.payer_number', '01712345678')
             ->assertJsonPath('data.status', 'pending');
@@ -44,7 +45,7 @@ class PaymentApiTest extends TestCase
 
         $this->assertSame($business->id, $payment->business_id);
         $this->assertSame($user->id, $payment->submitted_by_user_id);
-        $this->assertSame(1490, $payment->expected_amount_bdt);
+        $this->assertSame(297, $payment->expected_amount_bdt);
         $this->assertSame(
             PlanPaymentStatus::Pending,
             $payment->status,
@@ -60,6 +61,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'AB12CD34EF',
             'payer_number'   => '01812345678',
@@ -80,6 +82,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'AB12CD34EF',
             'payer_number'   => '01712345678',
@@ -112,6 +115,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'AB12CD34EF',
             'payer_number'   => '01712345678',
@@ -144,6 +148,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months'      => 12,
             'trx_id'              => 'ZX98YU76TR',
             'payer_number'        => '01912345678',
@@ -162,13 +167,13 @@ class PaymentApiTest extends TestCase
 
         $payment = PlanPaymentRequest::query()->sole();
 
-        $this->assertSame(5200, $payment->expected_amount_bdt);
-        $this->assertSame('unlimited', $payment->product_type->value);
+        $this->assertSame(1188, $payment->expected_amount_bdt);
+        $this->assertSame('sender_plus', $payment->product_type->value);
         $this->assertSame(
             PlanPaymentStatus::Pending,
             $payment->status,
         );
-        $this->assertNull($payment->beneficiary_user_id);
+        $this->assertSame($user->id, $payment->beneficiary_user_id);
         $this->assertNull($payment->applied_at);
 
         $this->assertDatabaseMissing(
@@ -189,6 +194,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 6,
             'trx_id'         => 'MN45PQ67RS',
             'payer_number'   => '01612345678',
@@ -218,6 +224,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($userA);
 
         $responseA = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'AA11BB22CC',
             'payer_number'   => '01712345678',
@@ -232,6 +239,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($userB);
 
         $responseB = $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 3,
             'trx_id'         => 'DD33EE44FF',
             'payer_number'   => '01812345678',
@@ -271,6 +279,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($ownerA);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months'       => 1,
             'trx_id'               => 'TENANT0001',
             'payer_number'         => '01712345678',
@@ -317,6 +326,7 @@ class PaymentApiTest extends TestCase
     Sanctum::actingAs($owner);
 
     $response = $this->postJson('/api/v1/payments', [
+        'product'        => 'sender_plus',
         'package_months' => 1,
         'trx_id' => 'REWARD0001',
         'payer_number' => '01712345678',
@@ -333,7 +343,7 @@ class PaymentApiTest extends TestCase
     $response
         ->assertCreated()
         ->assertJsonPath('success', true)
-        ->assertJsonPath('data.amount_bdt', 520);
+        ->assertJsonPath('data.amount_bdt', 99);
 
     $payment = PlanPaymentRequest::query()->sole();
 
@@ -342,7 +352,7 @@ class PaymentApiTest extends TestCase
      * the authoritative package price must remain unchanged.
      */
     $this->assertSame(
-        520,
+        99,
         $payment->expected_amount_bdt,
     );
 
@@ -361,6 +371,7 @@ class PaymentApiTest extends TestCase
         Sanctum::actingAs($user);
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 24,
             'trx_id'         => 'AB12CD34EF',
             'payer_number'   => '01712345678',
@@ -381,6 +392,7 @@ class PaymentApiTest extends TestCase
             ->assertJsonPath('code', 'UNAUTHENTICATED');
 
         $this->postJson('/api/v1/payments', [
+            'product'        => 'sender_plus',
             'package_months' => 1,
             'trx_id'         => 'AB12CD34EF',
             'payer_number'   => '01712345678',

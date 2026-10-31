@@ -8,9 +8,12 @@ use App\Enums\PlanPaymentProduct;
 use App\Enums\PlanPaymentStatus;
 use App\Exceptions\ApiException;
 use App\Models\BusinessSubscription;
+use App\Models\ManagerSubscription;
 use App\Models\PlanPaymentRequest;
 use App\Models\PlatformAdmin;
+use App\Models\SenderSubscription;
 use App\Models\User;
+use App\Support\Plans\IndependentPlanPackages;
 use App\Support\Plans\PaymentApprovalService;
 use App\Support\Plans\PaymentRequestService;
 use App\Support\Plans\PlanLimits;
@@ -160,79 +163,61 @@ class PaymentApprovalServiceTest extends TestCase
         );
     }
 
-    public function test_approval_activates_paid_unlimited_and_records_decision(): void
-    {
-        CarbonImmutable::setTestNow(
-            CarbonImmutable::parse('2026-10-21 00:00:00', 'UTC')
-        );
+  public function test_pending_legacy_unlimited_payment_cannot_be_approved(): void
+{
+    $business = $this->makeBusiness();
 
-        $business = $this->makeBusiness();
-        $owner = $this->makeMember(
-            $business,
-            BusinessRole::Owner,
-        );
+    $owner = $this->makeMember(
+        $business,
+        BusinessRole::Owner,
+    );
 
-        $payment = $this->requests->createUnlimited(
-            $business,
-            $owner,
-            3,
-            'PKGAPP0001',
-            '01712345678',
-        );
+    $payment = $this->requests->createUnlimited(
+        $business,
+        $owner,
+        3,
+        'PKGAPP0001',
+        '01712345678',
+    );
 
-        $admin = $this->makePlatformAdmin();
+    $admin = $this->makePlatformAdmin();
 
-        $approved = $this->approvals->approve(
+    $this->assertApiException(
+        fn() => $this->approvals->approve(
             $payment,
             $admin,
-        );
+        ),
+        'PLAN_PAYMENT_PRODUCT_RETIRED',
+        409,
+    );
 
-        $this->assertSame(
-            PlanPaymentStatus::Approved,
-            $approved->status,
-        );
+    $payment->refresh();
 
-        $this->assertSame(
-            $admin->id,
-            $approved->decided_by_platform_admin_id,
-        );
+    $this->assertSame(
+        PlanPaymentStatus::Pending,
+        $payment->status,
+    );
 
-        $this->assertNull($approved->decision_reason);
-        $this->assertNotNull($approved->decided_at);
-        $this->assertNotNull($approved->applied_at);
+    $this->assertNull($payment->applied_at);
+    $this->assertNull($payment->decided_at);
 
-        $subscription = BusinessSubscription::query()
-            ->where('business_id', $business->id)
-            ->firstOrFail();
+    $this->assertDatabaseMissing(
+        'business_subscriptions',
+        [
+            'business_id' => $business->id,
+            'access_source' => 'paid',
+        ],
+    );
 
-        $this->assertSame(
-            PlanLimits::UNLIMITED,
-            $subscription->tier,
-        );
-
-        $this->assertSame(
-            'paid',
-            $subscription->access_source,
-        );
-
-        $this->assertTrue(
-            $subscription->access_starts_at->equalTo(
-                CarbonImmutable::parse(
-                    '2026-10-21 00:00:00',
-                    'UTC',
-                ),
-            ),
-        );
-
-        $this->assertTrue(
-            $subscription->access_ends_at->equalTo(
-                CarbonImmutable::parse(
-                    '2027-01-21 00:00:00',
-                    'UTC',
-                ),
-            ),
-        );
-    }
+    $this->assertDatabaseMissing(
+        'audit_logs',
+        [
+            'action' => 'plan_payment.approved',
+            'target_type' => 'PlanPaymentRequest',
+            'target_id' => $payment->id,
+        ],
+    );
+}
 
     public function test_approving_same_payment_twice_does_not_extend_twice(): void
     {
@@ -243,9 +228,10 @@ class PaymentApprovalServiceTest extends TestCase
         $business = $this->makeBusiness();
         $owner = $this->makeMember($business);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'IDEM000001',
             '01712345678',
@@ -253,13 +239,10 @@ class PaymentApprovalServiceTest extends TestCase
 
         $admin = $this->makePlatformAdmin();
 
-        $first = $this->approvals->approve(
-            $payment,
-            $admin,
-        );
+        $first = $this->approvals->approve($payment, $admin);
 
-        $subscription = BusinessSubscription::query()
-            ->where('business_id', $business->id)
+        $subscription = SenderSubscription::query()
+            ->where('user_id', $owner->id)
             ->firstOrFail();
 
         $firstEndsAt = $subscription->access_ends_at;
@@ -270,7 +253,7 @@ class PaymentApprovalServiceTest extends TestCase
         );
 
         $second = $this->approvals->approve(
-            $payment,
+            $payment->refresh(),
             $admin,
         );
 
@@ -282,15 +265,11 @@ class PaymentApprovalServiceTest extends TestCase
         );
 
         $this->assertTrue(
-            $subscription->access_ends_at->equalTo(
-                $firstEndsAt,
-            ),
+            $subscription->access_ends_at->equalTo($firstEndsAt),
         );
 
         $this->assertTrue(
-            $second->applied_at->equalTo(
-                $firstAppliedAt,
-            ),
+            $second->applied_at->equalTo($firstAppliedAt),
         );
 
         $this->assertTrue(
@@ -356,9 +335,10 @@ class PaymentApprovalServiceTest extends TestCase
         $business = $this->makeBusiness();
         $owner = $this->makeMember($business);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::ManagerPro,
             1,
             'APPREJ0001',
             '01712345678',
@@ -556,278 +536,282 @@ class PaymentApprovalServiceTest extends TestCase
     }
 
     public function test_platform_admin_underlying_user_must_remain_active_and_verified(): void
-{
-    $business = $this->makeBusiness();
-    $owner = $this->makeMember($business);
+    {
+        $business = $this->makeBusiness();
+        $owner = $this->makeMember($business);
 
-    $approvePayment = $this->requests->createUnlimited(
-        $business,
-        $owner,
-        1,
-        'USRSTAT001',
-        '01712345678',
-    );
+        $approvePayment = $this->requests->createUnlimited(
+            $business,
+            $owner,
+            1,
+            'USRSTAT001',
+            '01712345678',
+        );
 
-    $rejectPayment = $this->requests->createUnlimited(
-        $business,
-        $owner,
-        3,
-        'USRVER0001',
-        '01812345678',
-    );
+        $rejectPayment = $this->requests->createUnlimited(
+            $business,
+            $owner,
+            3,
+            'USRVER0001',
+            '01812345678',
+        );
 
-    /*
-     * PlatformAdmin row is Active, but its underlying
-     * user account has been suspended.
-     */
-    $suspendedUserAdmin = $this->makePlatformAdmin();
+        /*
+         * PlatformAdmin row is Active, but its underlying
+         * user account has been suspended.
+         */
+        $suspendedUserAdmin = $this->makePlatformAdmin();
 
-    $suspendedUserAdmin->user->forceFill([
-        'status' => AccountStatus::Suspended,
-    ])->save();
+        $suspendedUserAdmin->user->forceFill([
+            'status' => AccountStatus::Suspended,
+        ])->save();
 
-    $this->assertApiException(
-        fn() => $this->approvals->approve(
-            $approvePayment,
-            $suspendedUserAdmin,
-        ),
-        'PLATFORM_ADMIN_FORBIDDEN',
-        403,
-    );
+        $this->assertApiException(
+            fn() => $this->approvals->approve(
+                $approvePayment,
+                $suspendedUserAdmin,
+            ),
+            'PLATFORM_ADMIN_FORBIDDEN',
+            403,
+        );
 
-    /*
-     * PlatformAdmin row is Active, but its underlying
-     * user has lost email verification.
-     */
-    $unverifiedUserAdmin = $this->makePlatformAdmin();
+        /*
+         * PlatformAdmin row is Active, but its underlying
+         * user has lost email verification.
+         */
+        $unverifiedUserAdmin = $this->makePlatformAdmin();
 
-    $unverifiedUserAdmin->user->forceFill([
-        'email_verified_at' => null,
-    ])->save();
+        $unverifiedUserAdmin->user->forceFill([
+            'email_verified_at' => null,
+        ])->save();
 
-    $this->assertApiException(
-        fn() => $this->approvals->reject(
-            $rejectPayment,
-            $unverifiedUserAdmin,
-            'Should not be allowed.',
-        ),
-        'PLATFORM_ADMIN_FORBIDDEN',
-        403,
-    );
+        $this->assertApiException(
+            fn() => $this->approvals->reject(
+                $rejectPayment,
+                $unverifiedUserAdmin,
+                'Should not be allowed.',
+            ),
+            'PLATFORM_ADMIN_FORBIDDEN',
+            403,
+        );
 
-    /*
-     * Neither unauthorized operation may mutate payment state.
-     */
-    $this->assertSame(
-        PlanPaymentStatus::Pending,
-        $approvePayment->refresh()->status,
-    );
+        /*
+         * Neither unauthorized operation may mutate payment state.
+         */
+        $this->assertSame(
+            PlanPaymentStatus::Pending,
+            $approvePayment->refresh()->status,
+        );
 
-    $this->assertSame(
-        PlanPaymentStatus::Pending,
-        $rejectPayment->refresh()->status,
-    );
+        $this->assertSame(
+            PlanPaymentStatus::Pending,
+            $rejectPayment->refresh()->status,
+        );
 
-    $this->assertDatabaseMissing(
-        'business_subscriptions',
-        [
-            'business_id' => $business->id,
-            'access_source' => 'paid',
-        ],
-    );
-}
+        $this->assertDatabaseMissing(
+            'business_subscriptions',
+            [
+                'business_id'   => $business->id,
+                'access_source' => 'paid',
+            ],
+        );
+    }
 
-public function test_successful_payment_approval_is_audited(): void
-{
-    $business = $this->makeBusiness();
+    public function test_successful_payment_approval_is_audited(): void
+    {
+        $business = $this->makeBusiness();
 
-    $owner = $this->makeMember(
-        $business,
-        BusinessRole::Owner,
-    );
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
 
-    $payment = $this->requests->createUnlimited(
-        $business,
-        $owner,
-        1,
-        'AUDITAPP01',
-        '01712345678',
-    );
+        $payment = $this->requests->createIndependent(
+            $business,
+            $owner,
+            PlanPaymentProduct::SenderPlus, 1,
+            'AUDITAPP01',
+            '01712345678',
+        );
 
-    $admin = $this->makePlatformAdmin();
+        $admin = $this->makePlatformAdmin();
 
-    $approved = $this->approvals->approve(
-        $payment,
-        $admin,
-    );
+        $approved = $this->approvals->approve(
+            $payment,
+            $admin,
+        );
 
-    $this->assertDatabaseHas(
-        'audit_logs',
-        [
-            'business_id' => $business->id,
-            'actor_user_id' => $admin->user_id,
-            'action' => 'plan_payment.approved',
-            'target_type' => 'PlanPaymentRequest',
-            'target_id' => $approved->id,
-        ],
-    );
-}
+        $this->assertDatabaseHas(
+            'audit_logs',
+            [
+                'business_id'   => $business->id,
+                'actor_user_id' => $admin->user_id,
+                'action'        => 'plan_payment.approved',
+                'target_type'   => 'PlanPaymentRequest',
+                'target_id'     => $approved->id,
+            ],
+        );
+    }
 
-public function test_successful_payment_rejection_is_audited(): void
-{
-    $business = $this->makeBusiness();
+    public function test_successful_payment_rejection_is_audited(): void
+    {
+        $business = $this->makeBusiness();
 
-    $owner = $this->makeMember(
-        $business,
-        BusinessRole::Owner,
-    );
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
+        $payment = $this->requests->createIndependent(
+            $business,
+            $owner,
+            PlanPaymentProduct::SenderPlus,
+            1,
+            'AUDITAPP01',
+            '01712345678',
+        );
 
-    $payment = $this->requests->createUnlimited(
-        $business,
-        $owner,
-        1,
-        'AUDITREJ01',
-        '01712345678',
-    );
+        $admin = $this->makePlatformAdmin();
 
-    $admin = $this->makePlatformAdmin();
+        $rejected = $this->approvals->reject(
+            $payment,
+            $admin,
+            'Payment could not be verified.',
+        );
 
-    $rejected = $this->approvals->reject(
-        $payment,
-        $admin,
-        'Payment could not be verified.',
-    );
+        $this->assertDatabaseHas(
+            'audit_logs',
+            [
+                'business_id'   => $business->id,
+                'actor_user_id' => $admin->user_id,
+                'action'        => 'plan_payment.rejected',
+                'target_type'   => 'PlanPaymentRequest',
+                'target_id'     => $rejected->id,
+            ],
+        );
+    }
 
-    $this->assertDatabaseHas(
-        'audit_logs',
-        [
-            'business_id' => $business->id,
-            'actor_user_id' => $admin->user_id,
-            'action' => 'plan_payment.rejected',
-            'target_type' => 'PlanPaymentRequest',
-            'target_id' => $rejected->id,
-        ],
-    );
-}
-public function test_approval_retry_does_not_duplicate_audit_event(): void
-{
-    $business = $this->makeBusiness();
+    public function test_approval_retry_does_not_duplicate_audit_event(): void
+    {
+        $business = $this->makeBusiness();
 
-    $owner = $this->makeMember(
-        $business,
-        BusinessRole::Owner,
-    );
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
 
-    $payment = $this->requests->createUnlimited(
-        $business,
-        $owner,
-        1,
-        'AUDITRET01',
-        '01712345678',
-    );
+        $payment = $this->requests->createIndependent(
+            $business,
+            $owner,
+            PlanPaymentProduct::SenderPlus,
+            1,
+            'AUDITRET01',
+            '01712345678',
+        );
 
-    $admin = $this->makePlatformAdmin();
+        $admin = $this->makePlatformAdmin();
 
-    $this->approvals->approve(
-        $payment,
-        $admin,
-    );
+        $this->approvals->approve(
+            $payment,
+            $admin,
+        );
 
-    /*
-     * Idempotent retry.
-     */
-    $this->approvals->approve(
-        $payment->refresh(),
-        $admin,
-    );
+        /*
+         * Idempotent retry.
+         */
+        $this->approvals->approve(
+            $payment->refresh(),
+            $admin,
+        );
 
-    $this->assertSame(
-        1,
-        \App\Models\AuditLog::query()
-            ->where(
-                'business_id',
-                $business->id,
-            )
-            ->where(
-                'action',
-                'plan_payment.approved',
-            )
-            ->where(
-                'target_type',
-                'PlanPaymentRequest',
-            )
-            ->where(
-                'target_id',
-                $payment->id,
-            )
-            ->count(),
-    );
-}
-public function test_rejection_retry_does_not_duplicate_audit_event(): void
-{
-    $business = $this->makeBusiness();
+        $this->assertSame(
+            1,
+            \App\Models\AuditLog::query()
+                ->where(
+                    'business_id',
+                    $business->id,
+                )
+                ->where(
+                    'action',
+                    'plan_payment.approved',
+                )
+                ->where(
+                    'target_type',
+                    'PlanPaymentRequest',
+                )
+                ->where(
+                    'target_id',
+                    $payment->id,
+                )
+                ->count(),
+        );
+    }
 
-    $owner = $this->makeMember(
-        $business,
-        BusinessRole::Owner,
-    );
+    public function test_rejection_retry_does_not_duplicate_audit_event(): void
+    {
+        $business = $this->makeBusiness();
 
-    $payment = $this->requests->createUnlimited(
-        $business,
-        $owner,
-        1,
-        'AUDITRET02',
-        '01712345678',
-    );
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
 
-    $admin = $this->makePlatformAdmin();
+        $payment = $this->requests->createUnlimited(
+            $business,
+            $owner,
+            1,
+            'AUDITRET02',
+            '01712345678',
+        );
 
-    $this->approvals->reject(
-        $payment,
-        $admin,
-        'Payment could not be verified.',
-    );
+        $admin = $this->makePlatformAdmin();
 
-    /*
-     * Idempotent retry.
-     */
-    $this->approvals->reject(
-        $payment->refresh(),
-        $admin,
-        'Payment could not be verified.',
-    );
+        $this->approvals->reject(
+            $payment,
+            $admin,
+            'Payment could not be verified.',
+        );
 
-    $this->assertSame(
-        1,
-        \App\Models\AuditLog::query()
-            ->where(
-                'business_id',
-                $business->id,
-            )
-            ->where(
-                'action',
-                'plan_payment.rejected',
-            )
-            ->where(
-                'target_type',
-                'PlanPaymentRequest',
-            )
-            ->where(
-                'target_id',
-                $payment->id,
-            )
-            ->count(),
-    );
-}
+        /*
+         * Idempotent retry.
+         */
+        $this->approvals->reject(
+            $payment->refresh(),
+            $admin,
+            'Payment could not be verified.',
+        );
+
+        $this->assertSame(
+            1,
+            \App\Models\AuditLog::query()
+                ->where(
+                    'business_id',
+                    $business->id,
+                )
+                ->where(
+                    'action',
+                    'plan_payment.rejected',
+                )
+                ->where(
+                    'target_type',
+                    'PlanPaymentRequest',
+                )
+                ->where(
+                    'target_id',
+                    $payment->id,
+                )
+                ->count(),
+        );
+    }
 
     public function test_approval_revalidates_stored_package(): void
     {
         $business = $this->makeBusiness();
         $owner = $this->makeMember($business);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'BADPKG0001',
             '01712345678',
@@ -874,14 +858,14 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
         $business = $this->makeBusiness();
         $owner = $this->makeMember($business);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'BADAMT0001',
             '01712345678',
         );
-
         /*
          * Correct server price is 520 BDT.
          */
@@ -896,7 +880,7 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
                 $payment,
                 $admin,
             ),
-            'PLAN_PAYMENT_AMOUNT_MISMATCH',
+            'PLAN_PAYMENT_AMOUNT_INVALID',
             409,
         );
 
@@ -974,7 +958,7 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
         );
     }
 
-    public function test_trial_to_paid_starts_from_approval_time_and_preserves_trial_usage(): void
+    public function test_manager_pro_purchase_preserves_legacy_trial_history(): void
     {
         $now = CarbonImmutable::parse(
             '2026-10-21 00:00:00',
@@ -988,7 +972,7 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
 
         $trialUsedAt = $now->subDay();
 
-        BusinessSubscription::create([
+        $legacySubscription = BusinessSubscription::create([
             'business_id'      => $business->id,
             'tier'             => PlanLimits::UNLIMITED,
             'access_source'    => 'trial',
@@ -997,9 +981,10 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
             'trial_used_at'    => $trialUsedAt,
         ]);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::ManagerPro,
             1,
             'TRIALPAY01',
             '01712345678',
@@ -1007,17 +992,22 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
 
         $admin = $this->makePlatformAdmin();
 
-        $this->approvals->approve(
+        $approved = $this->approvals->approve(
             $payment,
             $admin,
         );
 
-        $subscription = BusinessSubscription::query()
+        $this->assertSame(
+            PlanPaymentStatus::Approved,
+            $approved->status,
+        );
+
+        $subscription = ManagerSubscription::query()
             ->where('business_id', $business->id)
             ->firstOrFail();
 
         $this->assertSame(
-            PlanLimits::UNLIMITED,
+            PlanLimits::MANAGER_PRO,
             $subscription->tier,
         );
 
@@ -1026,10 +1016,6 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
             $subscription->access_source,
         );
 
-        /*
-         * Paid time starts now. It does not append to the remaining
-         * trial period.
-         */
         $this->assertTrue(
             $subscription->access_starts_at->equalTo($now),
         );
@@ -1040,12 +1026,27 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
             ),
         );
 
-        /*
-         * Buying Unlimited must never restore another free trial.
-         */
+        $legacySubscription->refresh();
+
+        $this->assertSame(
+            PlanLimits::UNLIMITED,
+            $legacySubscription->tier,
+        );
+
+        $this->assertSame(
+            'trial',
+            $legacySubscription->access_source,
+        );
+
         $this->assertTrue(
-            $subscription->trial_used_at->equalTo(
+            $legacySubscription->trial_used_at->equalTo(
                 $trialUsedAt,
+            ),
+        );
+
+        $this->assertTrue(
+            $legacySubscription->access_ends_at->equalTo(
+                $now->addDays(6),
             ),
         );
     }
@@ -1084,6 +1085,172 @@ public function test_rejection_retry_does_not_duplicate_audit_event(): void
 
         $this->fail(
             "Expected ApiException {$code} was not thrown.",
+        );
+    }
+
+    public function test_sender_plus_approval_activates_paid_access(): void
+    {
+        CarbonImmutable::setTestNow(
+            CarbonImmutable::parse('2026-10-21 00:00:00', 'UTC')
+        );
+
+        $business = $this->makeBusiness();
+
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        $payment = $this->requests->createIndependent(
+            $business,
+            $owner,
+            PlanPaymentProduct::SenderPlus,
+            3,
+            'SNDAPP0001',
+            '01712345678',
+        );
+
+        $this->assertSame(
+            IndependentPlanPackages::priceBdt(
+                PlanPaymentProduct::SenderPlus,
+                3,
+            ),
+            $payment->expected_amount_bdt,
+        );
+
+        $admin = $this->makePlatformAdmin();
+
+        $approved = $this->approvals->approve(
+            $payment,
+            $admin,
+        );
+
+        $this->assertSame(
+            PlanPaymentStatus::Approved,
+            $approved->status,
+        );
+
+        $this->assertSame(
+            $admin->id,
+            $approved->decided_by_platform_admin_id,
+        );
+
+        $this->assertNotNull($approved->applied_at);
+
+        $subscription = SenderSubscription::query()
+            ->where('user_id', $owner->id)
+            ->firstOrFail();
+
+        $this->assertSame(
+            PlanLimits::SENDER_PLUS,
+            $subscription->tier,
+        );
+
+        $this->assertSame(
+            'paid',
+            $subscription->access_source,
+        );
+
+        $this->assertTrue(
+            $subscription->access_starts_at->equalTo(
+                CarbonImmutable::parse(
+                    '2026-10-21 00:00:00',
+                    'UTC',
+                ),
+            ),
+        );
+
+        $this->assertTrue(
+            $subscription->access_ends_at->equalTo(
+                CarbonImmutable::parse(
+                    '2027-01-21 00:00:00',
+                    'UTC',
+                ),
+            ),
+        );
+    }
+
+    public function test_manager_pro_approval_activates_paid_access(): void
+    {
+        CarbonImmutable::setTestNow(
+            CarbonImmutable::parse('2026-10-21 00:00:00', 'UTC')
+        );
+
+        $business = $this->makeBusiness();
+
+        $owner = $this->makeMember(
+            $business,
+            BusinessRole::Owner,
+        );
+
+        $payment = $this->requests->createIndependent(
+            $business,
+            $owner,
+            PlanPaymentProduct::ManagerPro,
+            3,
+            'MGRAPP0001',
+            '01712345678',
+        );
+
+        $this->assertNull($payment->beneficiary_user_id);
+
+        $this->assertSame(
+            IndependentPlanPackages::priceBdt(
+                PlanPaymentProduct::ManagerPro,
+                3,
+            ),
+            $payment->expected_amount_bdt,
+        );
+
+        $admin = $this->makePlatformAdmin();
+
+        $approved = $this->approvals->approve(
+            $payment,
+            $admin,
+        );
+
+        $this->assertSame(
+            PlanPaymentStatus::Approved,
+            $approved->status,
+        );
+
+        $this->assertSame(
+            $admin->id,
+            $approved->decided_by_platform_admin_id,
+        );
+
+        $this->assertNotNull($approved->applied_at);
+
+        $subscription = ManagerSubscription::query()
+            ->where('business_id', $business->id)
+            ->firstOrFail();
+
+        $this->assertSame(
+            PlanLimits::MANAGER_PRO,
+            $subscription->tier,
+        );
+
+        $this->assertSame(
+            'paid',
+            $subscription->access_source,
+        );
+
+        $this->assertTrue(
+            $subscription->access_starts_at->equalTo(
+                CarbonImmutable::parse(
+                    '2026-10-21 00:00:00',
+                    'UTC',
+                ),
+            ),
+        );
+
+        $this->assertTrue(
+            $subscription->access_ends_at->equalTo(
+                CarbonImmutable::parse(
+                    '2027-01-21 00:00:00',
+                    'UTC',
+                ),
+            ),
         );
     }
 }

@@ -208,7 +208,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (! $this->withinRefundWindow($record)) {
+        if (!$this->withinRefundWindow($record)) {
             return;
         }
 
@@ -241,7 +241,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (! $this->needsReapply($record)) {
+        if (!$this->needsReapply($record)) {
             return;
         }
 
@@ -275,7 +275,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (! $this->withinRefundWindow($record)) {
+        if (!$this->withinRefundWindow($record)) {
             return;
         }
 
@@ -302,7 +302,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (! $this->needsReapply($record)) {
+        if (!$this->needsReapply($record)) {
             return;
         }
 
@@ -331,7 +331,7 @@ final class PlanQuotaService
         $record->forceFill(['quota_refund_reapplied_at' => now()])->save();
     }
 
-    private function withinRefundWindow(SenderRemittance|ManagerTransaction $record): bool
+    private function withinRefundWindow(SenderRemittance | ManagerTransaction $record): bool
     {
         if ($record->quota_refunded_at !== null || $record->created_at === null) {
             return false;
@@ -343,7 +343,7 @@ final class PlanQuotaService
         && $now->lessThanOrEqualTo($record->created_at->copy()->addSeconds(600));
     }
 
-    private function needsReapply(SenderRemittance|ManagerTransaction $record): bool
+    private function needsReapply(SenderRemittance | ManagerTransaction $record): bool
     {
         return $record->quota_refunded_at !== null
         && $record->quota_refund_reapplied_at === null;
@@ -395,7 +395,7 @@ final class PlanQuotaService
         string $periodStart,
     ): BusinessMonthlyUsage {
         BusinessMonthlyUsage::query()->firstOrCreate([
-            'business_id' => $businessId,
+            'business_id'  => $businessId,
             'period_start' => $periodStart,
         ]);
 
@@ -412,8 +412,8 @@ final class PlanQuotaService
         string $periodStart,
     ): UserMonthlyUsage {
         UserMonthlyUsage::query()->firstOrCreate([
-            'business_id' => $businessId,
-            'user_id' => $userId,
+            'business_id'  => $businessId,
+            'user_id'      => $userId,
             'period_start' => $periodStart,
         ]);
 
@@ -439,11 +439,11 @@ final class PlanQuotaService
             $message,
             409,
             [
-                'limit' => $limit,
-                'used' => $used,
+                'limit'     => $limit,
+                'used'      => $used,
                 'remaining' => max(0, $limit - $used),
                 'resets_on' => $this->resetsOn($business, $at),
-                'plan' => $tier,
+                'plan'      => $tier,
             ],
         );
     }
@@ -460,10 +460,10 @@ final class PlanQuotaService
             $message,
             409,
             [
-                'limit' => $limit,
-                'used' => $used,
+                'limit'     => $limit,
+                'used'      => $used,
                 'remaining' => max(0, $limit - $used),
-                'plan' => $tier,
+                'plan'      => $tier,
             ],
         );
     }
@@ -481,14 +481,9 @@ final class PlanQuotaService
     private function instant(
         ?DateTimeInterface $at,
     ): DateTimeImmutable {
-        if ($at !== null) {
-            return DateTimeImmutable::createFromInterface($at);
-        }
-
-        return new DateTimeImmutable(
-            'now',
-            new DateTimeZone('UTC'),
-        );
+        return DateTimeImmutable::createFromInterface(
+            $at ?? now(),
+        )->setTimezone(new DateTimeZone('UTC'));
     }
 
     private function requireTransaction(): void

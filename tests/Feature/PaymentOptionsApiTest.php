@@ -4,18 +4,12 @@ namespace Tests\Feature;
 
 use App\Enums\AccountStatus;
 use App\Enums\BusinessRole;
+use App\Enums\PlanPaymentProduct;
 use App\Enums\PlanPaymentProvider;
-use App\Enums\ReferralRewardStatus;
-use App\Models\BusinessSubscription;
 use App\Models\PlatformAdmin;
 use App\Models\PlatformPaymentProviderSetting;
-use App\Models\ReferralReward;
 use App\Models\User;
-use App\Support\Plans\PaymentApprovalService;
 use App\Support\Plans\PaymentRequestService;
-use App\Support\Plans\PlanLimits;
-use App\Support\Plans\ReferralRules;
-use App\Support\Plans\ReferralService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\Support\MakesTenants;
@@ -98,35 +92,24 @@ class PaymentOptionsApiTest extends TestCase
 
         $packages = $response->json('data.packages');
 
-        $this->assertSame(
-            [
-                [
-                    'months' => 1,
-                    'base_amount_bdt' => 520,
+        $expected = [];
+
+        foreach ([
+            'sender_plus' => [1 => 99, 3 => 297, 6 => 594, 12 => 1188],
+            'manager_pro' => [1 => 299, 3 => 897, 6 => 1794, 12 => 3588],
+        ] as $product => $prices) {
+            foreach ($prices as $months => $amount) {
+                $expected[] = [
+                    'product' => $product,
+                    'months' => $months,
+                    'base_amount_bdt' => $amount,
                     'discount_bdt' => 0,
-                    'payable_amount_bdt' => 520,
-                ],
-                [
-                    'months' => 3,
-                    'base_amount_bdt' => 1490,
-                    'discount_bdt' => 0,
-                    'payable_amount_bdt' => 1490,
-                ],
-                [
-                    'months' => 6,
-                    'base_amount_bdt' => 2790,
-                    'discount_bdt' => 0,
-                    'payable_amount_bdt' => 2790,
-                ],
-                [
-                    'months' => 12,
-                    'base_amount_bdt' => 5200,
-                    'discount_bdt' => 0,
-                    'payable_amount_bdt' => 5200,
-                ],
-            ],
-            $packages,
-        );
+                    'payable_amount_bdt' => $amount,
+                ];
+            }
+        }
+
+        $this->assertSame($expected, $packages);
     }
 
     public function test_enabled_manual_bkash_is_exposed_to_owner(): void
@@ -182,93 +165,32 @@ class PaymentOptionsApiTest extends TestCase
             );
     }
 
-    public function test_available_referral_reward_previews_150_bdt_discount_without_reserving_it(): void
+    public function test_legacy_referral_reward_does_not_discount_new_packages(): void
     {
-        [$business, $owner] =
-            $this->makeAuthorizedMember(
-                BusinessRole::Owner,
-            );
-
-        $this->enableManualBkash();
-
-        $reward = $this->earnRenewalDiscount(
-            $business,
+        [, $owner] = $this->makeAuthorizedMember(
+            BusinessRole::Owner,
         );
 
+        $this->enableManualBkash();
         Sanctum::actingAs($owner);
 
-        $response = $this
-            ->getJson('/api/v1/payments/options')
+        $response = $this->getJson('/api/v1/payments/options')
             ->assertOk()
-            ->assertJsonPath(
-                'data.referral_discount.available',
-                true,
-            )
-            ->assertJsonPath(
-                'data.referral_discount.amount_bdt',
-                150,
-            );
+            ->assertJsonPath('data.referral_discount.available', false)
+            ->assertJsonPath('data.referral_discount.amount_bdt', 0);
 
         $packages = $response->json('data.packages');
 
-        $this->assertSame(
-            [
-                [
-                    'months' => 1,
-                    'base_amount_bdt' => 520,
-                    'discount_bdt' => 150,
-                    'payable_amount_bdt' => 370,
-                ],
-                [
-                    'months' => 3,
-                    'base_amount_bdt' => 1490,
-                    'discount_bdt' => 150,
-                    'payable_amount_bdt' => 1340,
-                ],
-                [
-                    'months' => 6,
-                    'base_amount_bdt' => 2790,
-                    'discount_bdt' => 150,
-                    'payable_amount_bdt' => 2640,
-                ],
-                [
-                    'months' => 12,
-                    'base_amount_bdt' => 5200,
-                    'discount_bdt' => 150,
-                    'payable_amount_bdt' => 5050,
-                ],
-            ],
-            $packages,
-        );
+        $this->assertCount(8, $packages);
 
-        /*
-         * GET /payments/options is preview-only.
-         * It must not reserve or consume the reward.
-         */
-        $reward->refresh();
-
-        $this->assertSame(
-            ReferralRewardStatus::Available,
-            $reward->status,
-        );
-
-        $this->assertNull(
-            $reward->reserved_for_payment_request_id,
-        );
-
-        $this->assertNull(
-            $reward->reserved_at,
-        );
-
-        $this->assertNull(
-            $reward->applied_to_payment_request_id,
-        );
-
-        $this->assertNull(
-            $reward->applied_at,
-        );
+        foreach ($packages as $package) {
+            $this->assertSame(0, $package['discount_bdt']);
+            $this->assertSame(
+                $package['base_amount_bdt'],
+                $package['payable_amount_bdt'],
+            );
+        }
     }
-
     public function test_two_pending_requests_disable_new_payment_in_options(): void
     {
         [$business, $owner] =
@@ -282,17 +204,19 @@ class PaymentOptionsApiTest extends TestCase
             PaymentRequestService::class,
         );
 
-        $payments->createUnlimited(
+        $payments->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'OPTCOUNT01',
             '01712345678',
         );
 
-        $payments->createUnlimited(
+        $payments->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             3,
             'OPTCOUNT02',
             '01812345678',
@@ -334,17 +258,19 @@ class PaymentOptionsApiTest extends TestCase
             PaymentRequestService::class,
         );
 
-        $payments->createUnlimited(
+        $payments->createIndependent(
             $otherBusiness,
             $otherOwner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'OTHEROPT01',
             '01712345678',
         );
 
-        $payments->createUnlimited(
+        $payments->createIndependent(
             $otherBusiness,
             $otherOwner,
+            PlanPaymentProduct::SenderPlus,
             3,
             'OTHEROPT02',
             '01812345678',
@@ -417,130 +343,40 @@ class PaymentOptionsApiTest extends TestCase
         );
 }
 
-public function test_discount_preview_matches_authoritative_post_and_reward_is_reserved(): void
-{
-    [$business, $owner] =
-        $this->makeAuthorizedMember(
+    public function test_new_payment_uses_full_price_without_referral_discount(): void
+    {
+        [, $owner] = $this->makeAuthorizedMember(
             BusinessRole::Owner,
         );
 
-    $this->enableManualBkash();
+        $this->enableManualBkash();
+        Sanctum::actingAs($owner);
 
-    $reward = $this->earnRenewalDiscount(
-        $business,
-    );
+        $this->getJson('/api/v1/payments/options')
+            ->assertOk()
+            ->assertJsonPath('data.referral_discount.available', false)
+            ->assertJsonPath('data.referral_discount.amount_bdt', 0)
+            ->assertJsonPath('data.packages.1.product', 'sender_plus')
+            ->assertJsonPath('data.packages.1.months', 3)
+            ->assertJsonPath('data.packages.1.base_amount_bdt', 297)
+            ->assertJsonPath('data.packages.1.discount_bdt', 0)
+            ->assertJsonPath('data.packages.1.payable_amount_bdt', 297);
 
-    Sanctum::actingAs($owner);
-
-    /*
-     * GET is only a preview.
-     */
-    $this->getJson('/api/v1/payments/options')
-        ->assertOk()
-        ->assertJsonPath(
-            'data.referral_discount.available',
-            true,
-        )
-        ->assertJsonPath(
-            'data.referral_discount.amount_bdt',
-            150,
-        )
-        ->assertJsonPath(
-            'data.packages.1.months',
-            3,
-        )
-        ->assertJsonPath(
-            'data.packages.1.base_amount_bdt',
-            1490,
-        )
-        ->assertJsonPath(
-            'data.packages.1.payable_amount_bdt',
-            1340,
-        );
-
-    $reward->refresh();
-
-    $this->assertSame(
-        ReferralRewardStatus::Available,
-        $reward->status,
-    );
-
-    /*
-     * POST remains authoritative.
-     *
-     * PaymentRequestService independently calculates the server
-     * package price and atomically reserves the available reward.
-     */
-    $response = $this->postJson(
-        '/api/v1/payments',
-        [
+        $this->postJson('/api/v1/payments', [
+            'product' => 'sender_plus',
             'package_months' => 3,
             'trx_id' => 'OPTPOST001',
             'payer_number' => '01712345678',
-        ],
-    )
-        ->assertCreated()
-        ->assertJsonPath(
-            'data.package_months',
-            3,
-        )
-        ->assertJsonPath(
-            'data.amount_bdt',
-            1340,
-        )
-        ->assertJsonPath(
-            'data.status',
-            'pending',
-        );
+            'referral_discount_bdt' => 150,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.product', 'sender_plus')
+            ->assertJsonPath('data.package_months', 3)
+            ->assertJsonPath('data.amount_bdt', 297)
+            ->assertJsonPath('data.status', 'pending');
 
-    $paymentId = $response->json('data.id');
-
-    $reward->refresh();
-
-    $this->assertSame(
-        ReferralRewardStatus::Reserved,
-        $reward->status,
-    );
-
-    $this->assertNotNull(
-        $reward->reserved_for_payment_request_id,
-    );
-
-    $this->assertNotNull(
-        $reward->reserved_at,
-    );
-
-    $this->assertNull(
-        $reward->applied_to_payment_request_id,
-    );
-
-    $this->assertNull(
-        $reward->applied_at,
-    );
-
-    /*
-     * Once the only available reward is reserved, a second payment
-     * must not be advertised as discounted.
-     */
-    $this->getJson('/api/v1/payments/options')
-        ->assertOk()
-        ->assertJsonPath(
-            'data.referral_discount.available',
-            false,
-        )
-        ->assertJsonPath(
-            'data.referral_discount.amount_bdt',
-            0,
-        )
-        ->assertJsonPath(
-            'data.packages.1.payable_amount_bdt',
-            1490,
-        );
-
-    $this->assertNotEmpty($paymentId);
-}
-
-
+        $this->assertDatabaseCount('referral_rewards', 0);
+    }
 
     private function enableManualBkash(): void
     {
@@ -557,84 +393,6 @@ public function test_discount_preview_matches_authoritative_post_and_reward_is_r
             'public_account_identifier' =>
                 '01712345678',
         ])->save();
-    }
-
-    private function earnRenewalDiscount(
-        $inviter,
-    ): ReferralReward {
-        /*
-         * A paid Unlimited inviter earns the 150 BDT reward
-         * only after a referred friend's paid Unlimited request
-         * is approved.
-         */
-        BusinessSubscription::query()->create([
-            'business_id' => $inviter->id,
-            'tier' => PlanLimits::UNLIMITED,
-            'access_source' => 'paid',
-            'access_starts_at' =>
-                now('UTC')->subDay(),
-            'access_ends_at' =>
-                now('UTC')->addMonths(3),
-            'trial_used_at' => null,
-        ]);
-
-        $referrals = app(
-            ReferralService::class,
-        );
-
-        $profile = $referrals->profileFor(
-            $inviter,
-        );
-
-        $referred = $this->makeBusiness([
-            'name' => 'Payment Options Friend',
-        ]);
-
-        $referredOwner = $this->makeMember(
-            $referred,
-            BusinessRole::Owner,
-        );
-
-        $referral = $referrals->claim(
-            $referred,
-            $referredOwner,
-            $profile->invite_code,
-        );
-
-        $payment = app(
-            PaymentRequestService::class,
-        )->createUnlimited(
-            $referred,
-            $referredOwner,
-            1,
-            'OPTREW0001',
-            '01912345678',
-        );
-
-        app(PaymentApprovalService::class)
-            ->approve(
-                $payment,
-                $this->makePlatformAdmin(),
-            );
-
-        $reward = ReferralReward::query()
-            ->where(
-                'referral_id',
-                $referral->id,
-            )
-            ->firstOrFail();
-
-        $this->assertSame(
-            ReferralRewardStatus::Available,
-            $reward->status,
-        );
-
-        $this->assertSame(
-            ReferralRules::PAID_RENEWAL_DISCOUNT_BDT,
-            $reward->discount_bdt,
-        );
-
-        return $reward;
     }
 
     private function makeAuthorizedMember(

@@ -47,6 +47,7 @@ final class PaymentApprovalService
             return $this->approveIndependent($request, $admin);
         }
 
+
         /*
          * The manual retry handles the narrow race where a referral
          * is claimed between our initial identity read and acquisition
@@ -144,6 +145,15 @@ final class PaymentApprovalService
                 $this->assertCleanPendingState(
                     $payment,
                 );
+
+                // Legacy Unlimited requests cannot receive new approvals.
+                if ($payment->product_type === PlanPaymentProduct::Unlimited) {
+                    throw new ApiException(
+                        'PLAN_PAYMENT_PRODUCT_RETIRED',
+                        'Unlimited is no longer available for approval.',
+                        409,
+                    );
+                }
 
                 /*
                  * Apply the purchased entitlement first.

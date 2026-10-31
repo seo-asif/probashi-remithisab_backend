@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\AccountStatus;
 use App\Enums\BusinessRole;
+use App\Enums\PlanPaymentProduct;
 use App\Models\PlatformAdmin;
 use App\Models\User;
 use App\Support\Plans\PaymentApprovalService;
@@ -268,9 +269,10 @@ class PaymentHistoryApiTest extends TestCase
 
         $payment = app(
             PaymentRequestService::class,
-        )->createUnlimited(
+        )->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             12,
             'APPHIST001',
             '01512345678',

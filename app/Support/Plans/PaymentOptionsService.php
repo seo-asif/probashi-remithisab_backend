@@ -30,67 +30,19 @@ final class PaymentOptionsService
             && $bkashNumber !== null
             && BangladeshMobileNumber::isValid($bkashNumber);
 
-        /*
-         * Preview only.
-         *
-         * We deliberately do not reserve a referral reward here.
-         * GET /payments/options must never mutate reward state.
-         *
-         * The actual reservation remains inside
-         * PaymentRequestService::createUnlimited().
-         */
-        $reward = ReferralReward::query()
-            ->where(
-                'beneficiary_business_id',
-                $business->id,
-            )
-            ->where(
-                'reward_type',
-                ReferralRewardType::RenewalDiscountBdt->value,
-            )
-            ->where(
-                'status',
-                ReferralRewardStatus::Available->value,
-            )
-            ->orderBy('id')
-            ->first();
-
-        $discount = 0;
-
-        if (
-            $reward !== null
-            && $reward->discount_bdt
-                === ReferralRules::PAID_RENEWAL_DISCOUNT_BDT
-        ) {
-            $discount =
-                ReferralRules::PAID_RENEWAL_DISCOUNT_BDT;
-        }
-
         $packages = [];
-
-        foreach (PlanPackages::months() as $months) {
-            $baseAmount = PlanPackages::priceBdt($months);
-
-            /*
-             * This is only the amount the user would currently expect
-             * to pay if they submit this package next.
-             *
-             * PaymentRequestService recalculates and reserves the
-             * authoritative reward during POST /payments.
-             */
-            $payableAmount = max(
-                0,
-                $baseAmount - $discount,
-            );
-
-            $packages[] = [
-                'months'             => $months,
-                'base_amount_bdt'    => $baseAmount,
-                'discount_bdt'       => $discount,
-                'payable_amount_bdt' => $payableAmount,
-            ];
+        foreach (IndependentPlanPackages::products() as $product) {
+            foreach (IndependentPlanPackages::months() as $months) {
+                $price = IndependentPlanPackages::priceBdt($product, $months);
+                $packages[] = [
+                    'product' => $product->value,
+                    'months' => $months,
+                    'base_amount_bdt' => $price,
+                    'discount_bdt' => 0,
+                    'payable_amount_bdt' => $price,
+                ];
+            }
         }
-
         $pendingCount = PlanPaymentRequest::query()
             ->where('business_id', $business->id)
             ->where(
@@ -119,8 +71,8 @@ final class PaymentOptionsService
             'packages' => $packages,
 
             'referral_discount' => [
-                'available' => $discount > 0,
-                'amount_bdt' => $discount,
+                'available' => false,
+                'amount_bdt' => 0,
             ],
 
             'pending_requests' => [

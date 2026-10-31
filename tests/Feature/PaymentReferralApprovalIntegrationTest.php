@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Enums\AccountStatus;
 use App\Enums\BusinessRole;
+use App\Enums\PlanPaymentProduct;
 use App\Enums\PlanPaymentStatus;
 use App\Enums\ReferralRewardStatus;
 use App\Enums\ReferralRewardType;
@@ -47,21 +48,14 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_approving_paid_unlimited_automatically_qualifies_existing_referral(): void
+    public function test_retired_unlimited_approval_does_not_qualify_referral(): void
     {
-        $now = CarbonImmutable::parse(
-            '2026-10-21 08:00:00',
-            'UTC',
-        );
-
-        CarbonImmutable::setTestNow($now);
-
         $inviter = $this->makeBusiness([
             'name' => 'Free Inviter',
         ]);
 
         [$referred, $owner, $referral] =
-        $this->claimedReferral($inviter);
+            $this->claimedReferral($inviter);
 
         $payment = $this->requests->createUnlimited(
             $referred,
@@ -73,88 +67,66 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
 
         $admin = $this->makePlatformAdmin();
 
-        $approved = $this->approvals->approve(
-            $payment,
-            $admin,
-        );
+        try {
+            $this->approvals->approve(
+                $payment,
+                $admin,
+            );
 
+            $this->fail(
+                'Expected retired Unlimited approval to be rejected.',
+            );
+        } catch (ApiException $e) {
+            $this->assertSame(
+                'PLAN_PAYMENT_PRODUCT_RETIRED',
+                $e->errorCode,
+            );
+
+            $this->assertSame(
+                409,
+                $e->status,
+            );
+        }
         $this->assertSame(
-            PlanPaymentStatus::Approved,
-            $approved->status,
+            PlanPaymentStatus::Pending,
+            $payment->refresh()->status,
         );
 
         $referral->refresh();
 
         $this->assertSame(
-            ReferralStatus::Qualified,
+            ReferralStatus::Claimed,
             $referral->status,
         );
 
-        $this->assertSame(
-            $payment->id,
+        $this->assertNull(
             $referral->qualifying_payment_request_id,
         );
 
-        $this->assertSame(
-            1,
-            $referral->qualification_sequence,
+        $this->assertDatabaseCount(
+            'referral_rewards',
+            0,
         );
 
-        $this->assertNotNull(
-            $referral->qualified_at,
+        $this->assertDatabaseMissing(
+            'business_subscriptions',
+            [
+                'business_id' => $inviter->id,
+                'access_source' => 'referral',
+            ],
         );
 
-        $reward = ReferralReward::query()
-            ->where('referral_id', $referral->id)
-            ->firstOrFail();
-
-        $this->assertSame(
-            ReferralRewardType::UnlimitedDays,
-            $reward->reward_type,
-        );
-
-        $this->assertSame(
-            ReferralRewardStatus::Applied,
-            $reward->status,
-        );
-
-        $this->assertSame(
-            ReferralRules::FREE_REWARD_DAYS,
-            $reward->unlimited_days,
-        );
-
-        $this->assertNull(
-            $reward->discount_bdt,
-        );
-
-        $subscription = BusinessSubscription::query()
-            ->where('business_id', $inviter->id)
-            ->firstOrFail();
-
-        $this->assertSame(
-            PlanLimits::UNLIMITED,
-            $subscription->tier,
-        );
-
-        $this->assertSame(
-            'referral',
-            $subscription->access_source,
-        );
-
-        $this->assertTrue(
-            $subscription->access_starts_at->equalTo($now),
-        );
-
-        $this->assertTrue(
-            $subscription->access_ends_at->equalTo(
-                $now->addDays(
-                    ReferralRules::FREE_REWARD_DAYS,
-                ),
-            ),
+        $this->assertDatabaseMissing(
+            'audit_logs',
+            [
+                'action' => 'plan_payment.approved',
+                'target_type' => 'PlanPaymentRequest',
+                'target_id' => $payment->id,
+            ],
         );
     }
 
-    public function test_paid_unlimited_inviter_receives_150_bdt_reward_on_friend_approval(): void
+    public function test_manager_pro_purchase_does_not_generate_legacy_referral_discount(): void
     {
         $now = CarbonImmutable::parse(
             '2026-10-21 08:00:00',
@@ -170,20 +142,21 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
         $paidEndsAt = $now->addMonthsNoOverflow(3);
 
         BusinessSubscription::create([
-            'business_id'      => $inviter->id,
-            'tier'             => PlanLimits::UNLIMITED,
-            'access_source'    => 'paid',
+            'business_id' => $inviter->id,
+            'tier' => PlanLimits::UNLIMITED,
+            'access_source' => 'paid',
             'access_starts_at' => $now->subDay(),
-            'access_ends_at'   => $paidEndsAt,
-            'trial_used_at'    => null,
+            'access_ends_at' => $paidEndsAt,
+            'trial_used_at' => null,
         ]);
 
         [$referred, $owner, $referral] =
-        $this->claimedReferral($inviter);
+            $this->claimedReferral($inviter);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $referred,
             $owner,
+            PlanPaymentProduct::ManagerPro,
             3,
             'INTEG00002',
             '01812345678',
@@ -191,50 +164,41 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
 
         $admin = $this->makePlatformAdmin();
 
-        $this->approvals->approve(
+        $approved = $this->approvals->approve(
             $payment,
             $admin,
+        );
+
+        $this->assertSame(
+            PlanPaymentStatus::Approved,
+            $approved->status,
+        );
+
+        $this->assertDatabaseHas(
+            'manager_subscriptions',
+            [
+                'business_id' => $referred->id,
+                'tier' => PlanLimits::MANAGER_PRO,
+                'access_source' => 'paid',
+            ],
         );
 
         $referral->refresh();
 
         $this->assertSame(
-            ReferralStatus::Qualified,
+            ReferralStatus::Claimed,
             $referral->status,
         );
 
-        $reward = ReferralReward::query()
-            ->where('referral_id', $referral->id)
-            ->firstOrFail();
-
-        $this->assertSame(
-            ReferralRewardType::RenewalDiscountBdt,
-            $reward->reward_type,
-        );
-
-        $this->assertSame(
-            ReferralRewardStatus::Available,
-            $reward->status,
-        );
-
-        $this->assertSame(
-            ReferralRules::PAID_RENEWAL_DISCOUNT_BDT,
-            $reward->discount_bdt,
-        );
-
-        $this->assertSame(
-            150,
-            $reward->discount_bdt,
-        );
-
         $this->assertNull(
-            $reward->unlimited_days,
+            $referral->qualifying_payment_request_id,
         );
 
-        /*
-         * Earning a future renewal discount must not alter
-         * the inviter's current paid entitlement.
-         */
+        $this->assertDatabaseCount(
+            'referral_rewards',
+            0,
+        );
+
         $subscription = BusinessSubscription::query()
             ->where('business_id', $inviter->id)
             ->firstOrFail();
@@ -251,7 +215,7 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
         );
     }
 
-    public function test_retrying_same_payment_approval_cannot_duplicate_referral_reward(): void
+    public function test_sender_plus_approval_retry_does_not_create_referral_reward(): void
     {
         $now = CarbonImmutable::parse(
             '2026-10-21 08:00:00',
@@ -265,11 +229,12 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
         ]);
 
         [$referred, $owner, $referral] =
-        $this->claimedReferral($inviter);
+            $this->claimedReferral($inviter);
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $referred,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'INTEG00003',
             '01912345678',
@@ -277,35 +242,20 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
 
         $admin = $this->makePlatformAdmin();
 
-        $first = $this->approvals->approve(
-            $payment,
-            $admin,
-        );
+        $first = $this->approvals->approve($payment, $admin);
+        $firstAppliedAt = $first->applied_at;
 
-        $firstReward = ReferralReward::query()
-            ->where('referral_id', $referral->id)
-            ->firstOrFail();
-
-        $firstRewardId = $firstReward->id;
-
-        $subscription = BusinessSubscription::query()
-            ->where('business_id', $inviter->id)
+        $subscription = \App\Models\SenderSubscription::query()
+            ->where('user_id', $owner->id)
             ->firstOrFail();
 
         $firstEndsAt = $subscription->access_ends_at;
 
-        CarbonImmutable::setTestNow(
-            $now->addDay(),
-        );
+        CarbonImmutable::setTestNow($now->addDay());
 
         $second = $this->approvals->approve(
-            $payment,
+            $payment->refresh(),
             $admin,
-        );
-
-        $this->assertSame(
-            PlanPaymentStatus::Approved,
-            $first->status,
         );
 
         $this->assertSame(
@@ -313,30 +263,23 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
             $second->status,
         );
 
-        $this->assertDatabaseCount(
-            'referral_rewards',
-            1,
+        $this->assertTrue(
+            $second->applied_at->equalTo($firstAppliedAt),
         );
-
-        $reward = ReferralReward::query()
-            ->where('referral_id', $referral->id)
-            ->firstOrFail();
-
-        $this->assertSame(
-            $firstRewardId,
-            $reward->id,
-        );
-
-        $subscription->refresh();
 
         $this->assertTrue(
-            $subscription->access_ends_at->equalTo(
-                $firstEndsAt,
-            ),
+            $subscription->refresh()->access_ends_at->equalTo($firstEndsAt),
         );
+
+        $this->assertSame(
+            ReferralStatus::Claimed,
+            $referral->refresh()->status,
+        );
+
+        $this->assertDatabaseCount('referral_rewards', 0);
     }
 
-    public function test_payment_without_referral_still_approves_normally(): void
+    public function test_manager_pro_payment_without_referral_approves_normally(): void
     {
         $business = $this->makeBusiness([
             'name' => 'Direct Customer',
@@ -347,9 +290,10 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
             BusinessRole::Owner,
         );
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $business,
             $owner,
+            PlanPaymentProduct::ManagerPro,
             1,
             'INTEG00004',
             '01722345678',
@@ -368,10 +312,10 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
         );
 
         $this->assertDatabaseHas(
-            'business_subscriptions',
+            'manager_subscriptions',
             [
-                'business_id'   => $business->id,
-                'tier'          => PlanLimits::UNLIMITED,
+                'business_id' => $business->id,
+                'tier' => PlanLimits::MANAGER_PRO,
                 'access_source' => 'paid',
             ],
         );
@@ -384,6 +328,14 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
         $this->assertDatabaseCount(
             'referral_rewards',
             0,
+        );
+
+        $this->assertDatabaseMissing(
+            'business_subscriptions',
+            [
+                'business_id' => $business->id,
+                'access_source' => 'paid',
+            ],
         );
     }
 
@@ -466,9 +418,10 @@ class PaymentReferralApprovalIntegrationTest extends TestCase
             BusinessRole::Owner,
         );
 
-        $payment = $this->requests->createUnlimited(
+        $payment = $this->requests->createIndependent(
             $referred,
             $owner,
+            PlanPaymentProduct::SenderPlus,
             1,
             'INTEG00006',
             '01512345678',
