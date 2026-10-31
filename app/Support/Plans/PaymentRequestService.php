@@ -200,6 +200,81 @@ final class PaymentRequestService
         }
     }
 
+    /**
+     * Submit a new independent subscription payment request.
+     * Approval and entitlement activation are intentionally separate.
+     */
+    public function createIndependent(
+        Business $business,
+        User $submittedBy,
+        PlanPaymentProduct $product,
+        int $months,
+        string $trxId,
+        string $payerNumber,
+    ): PlanPaymentRequest {
+        if (!in_array($product, IndependentPlanPackages::products(), true)) {
+            throw new ApiException('PLAN_PRODUCT_INVALID', 'Choose Sender Plus or Manager Pro.', 422);
+        }
+
+        if (!IndependentPlanPackages::isValidMonths($months)) {
+            throw new ApiException('PLAN_PACKAGE_INVALID', 'Choose a valid subscription duration.', 422);
+        }
+
+        $trxId = $this->normalizeTrxId($trxId);
+        if (!preg_match('/\A[A-Z0-9]{10}\z/D', $trxId)) {
+            throw new ApiException('PAYMENT_TRX_INVALID', 'TrxID must contain exactly 10 letters and numbers.', 422);
+        }
+
+        $payerNumber = $this->normalizePayerNumber($payerNumber);
+        if (!BangladeshMobileNumber::isValid($payerNumber)) {
+            throw new ApiException('PAYMENT_PAYER_NUMBER_INVALID', 'Enter the 11-digit Bangladesh mobile number used to make the payment.', 422);
+        }
+
+        $trxHash = $this->hasher->hash(self::TRX_HASH_DOMAIN, $trxId);
+        $this->assertTrxUnused($trxHash);
+
+        try {
+            return DB::transaction(function () use ($business, $submittedBy, $product, $months, $trxId, $trxHash, $payerNumber): PlanPaymentRequest {
+                $lockedBusiness = Business::query()
+                    ->whereKey($business->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $this->assertCanSubmit($lockedBusiness, $submittedBy);
+                $this->assertPendingSlotAvailable($lockedBusiness);
+                $this->assertTrxUnused($trxHash);
+
+                $payment = PlanPaymentRequest::create([
+                    'business_id' => $lockedBusiness->id,
+                    'submitted_by_user_id' => $submittedBy->id,
+                    'beneficiary_user_id' => $product === PlanPaymentProduct::SenderPlus
+                        ? $submittedBy->id : null,
+                    'product_type' => $product,
+                    'package_months' => $months,
+                    'expected_amount_bdt' => IndependentPlanPackages::priceBdt($product, $months),
+                    'trx_id' => $trxId,
+                    'trx_id_hash' => $trxHash,
+                    'payer_number' => $payerNumber,
+                ]);
+
+                // New subscriptions never reserve legacy referral discounts.
+                $this->auditLogger->record(
+                    'plan_payment.submitted',
+                    $submittedBy,
+                    $lockedBusiness->id,
+                    $payment,
+                );
+
+                return $payment;
+            });
+        } catch (QueryException $e) {
+            if (PlanPaymentRequest::query()->where('trx_id_hash', $trxHash)->exists()) {
+                throw $this->duplicateTrx();
+            }
+            throw $e;
+        }
+    }
+
     public function normalizeTrxId(string $value): string
     {
         return preg_replace(
