@@ -5,6 +5,8 @@ namespace App\Support\Plans;
 use App\Models\Business;
 use App\Models\BusinessMonthlyUsage;
 use App\Models\BusinessSubscription;
+use App\Models\SenderSubscription;
+use App\Models\ManagerSubscription;
 use App\Models\Customer;
 use App\Models\SenderRecipient;
 use App\Models\UserMonthlyUsage;
@@ -147,6 +149,89 @@ final class PlanAllowanceService
                 ),
 
             ],
+        ];
+    }
+
+    /** Independent Sender allowance; legacy Unlimited cannot grant Sender Plus. */
+    public function senderSnapshot(
+        Business $business,
+        int $userId,
+        ?DateTimeInterface $at = null,
+    ): array {
+        $subscription = SenderSubscription::query()
+            ->where('user_id', $userId)
+            ->first();
+        $tier = PlanResolver::effectiveSenderTier($subscription, $at);
+        $paid = $tier === PlanLimits::SENDER_PLUS;
+        $legacy = $this->snapshot($business, $userId, $at);
+        $allowances = $legacy['allowances'];
+
+        foreach (['sender_remittances', 'family_members'] as $key) {
+            $allowances[$key]['limit'] = $paid ? null : (
+                $key === 'sender_remittances'
+                    ? PlanLimits::FREE_SENDER_REMITTANCES + $allowances[$key]['bonus']
+                    : PlanLimits::FREE_FAMILY_MEMBERS
+            );
+            $allowances[$key]['remaining'] = $paid
+                ? null
+                : max(0, $allowances[$key]['limit'] - $allowances[$key]['used']);
+        }
+
+        return $this->independentSnapshot($tier, $subscription, $paid, [
+            'sender_remittances' => $allowances['sender_remittances'],
+            'family_members' => $allowances['family_members'],
+        ]);
+    }
+
+    /** Independent Manager allowance; legacy Unlimited cannot grant Manager Pro. */
+    public function managerSnapshot(
+        Business $business,
+        int $userId,
+        ?DateTimeInterface $at = null,
+    ): array {
+        $subscription = ManagerSubscription::query()
+            ->where('business_id', $business->id)
+            ->first();
+        $tier = PlanResolver::effectiveManagerTier($subscription, $at);
+        $paid = $tier === PlanLimits::MANAGER_PRO;
+        $legacy = $this->snapshot($business, $userId, $at);
+        $allowances = $legacy['allowances'];
+
+        foreach (['manager_transactions', 'customers'] as $key) {
+            $allowances[$key]['limit'] = $paid ? null : (
+                $key === 'manager_transactions'
+                    ? PlanLimits::FREE_MANAGER_TRANSACTIONS + $allowances[$key]['bonus']
+                    : PlanLimits::FREE_CUSTOMERS
+            );
+            $allowances[$key]['remaining'] = $paid
+                ? null
+                : max(0, $allowances[$key]['limit'] - $allowances[$key]['used']);
+        }
+
+        return $this->independentSnapshot($tier, $subscription, $paid, [
+            'manager_transactions' => $allowances['manager_transactions'],
+            'customers' => $allowances['customers'],
+        ]);
+    }
+
+    private function independentSnapshot(
+        string $tier,
+        SenderSubscription|ManagerSubscription|null $subscription,
+        bool $paid,
+        array $allowances,
+    ): array {
+        return [
+            'tier' => $tier,
+            'access_source' => $subscription?->access_source,
+            'access_starts_at' => $this->utcIso($subscription?->access_starts_at),
+            'access_ends_at' => $this->utcIso($subscription?->access_ends_at),
+            'entitlements' => [
+                'basic_pdf' => true,
+                'monthly_pdf' => true,
+                'custom_date_range' => $paid,
+                'csv_export' => $paid,
+            ],
+            'allowances' => $allowances,
         ];
     }
 

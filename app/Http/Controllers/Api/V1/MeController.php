@@ -39,6 +39,18 @@ class MeController extends Controller
                 $now,
             ),
 
+            'sender_plan' => $plans->senderSnapshot(
+                $business,
+                (int) $request->user()->id,
+                $now,
+            ),
+
+            'manager_plan' => $plans->managerSnapshot(
+                $business,
+                (int) $request->user()->id,
+                $now,
+            ),
+
             'time'       => [
                 'server_utc'        => BusinessClock::utcIso($now),
                 'business_local'    => $clock->localIso($now),
