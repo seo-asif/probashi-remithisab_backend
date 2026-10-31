@@ -11,6 +11,10 @@ use App\Models\Business;
 use App\Models\BusinessReferral;
 use App\Models\PlanPaymentRequest;
 use App\Models\PlatformAdmin;
+use App\Models\SenderSubscription;
+use App\Models\ManagerSubscription;
+use App\Models\User;
+use Carbon\CarbonImmutable;
 use App\Models\ReferralReward;
 use App\Services\Auth\AuditLogger;
 use Illuminate\Support\Facades\DB;
@@ -30,6 +34,19 @@ final class PaymentApprovalService
         PlanPaymentRequest $request,
         PlatformAdmin $admin,
     ): PlanPaymentRequest {
+        // Independent products never enter the legacy referral/Unlimited path.
+        $product = PlanPaymentRequest::query()
+            ->whereKey($request->id)
+            ->toBase()
+            ->value('product_type');
+
+        if (in_array($product, [
+            PlanPaymentProduct::SenderPlus->value,
+            PlanPaymentProduct::ManagerPro->value,
+        ], true)) {
+            return $this->approveIndependent($request, $admin);
+        }
+
         /*
          * The manual retry handles the narrow race where a referral
          * is claimed between our initial identity read and acquisition
@@ -243,6 +260,184 @@ final class PaymentApprovalService
         throw new LogicException(
             'Referral relationship changed repeatedly during payment approval.'
         );
+    }
+
+    /**
+     * Independent subscriptions have no referral qualification or discounts.
+     * The business row serializes business approvals; for Sender Plus the
+     * user row additionally serializes renewals across different businesses.
+     */
+    private function approveIndependent(
+        PlanPaymentRequest $request,
+        PlatformAdmin $admin,
+    ): PlanPaymentRequest {
+        return DB::transaction(function () use ($request, $admin): PlanPaymentRequest {
+            $lockedAdmin = $this->lockActiveAdmin($admin->id);
+
+            $identity = PlanPaymentRequest::query()
+                ->select(['id', 'business_id'])
+                ->findOrFail($request->id);
+
+            $business = Business::query()
+                ->whereKey($identity->business_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            $payment = PlanPaymentRequest::query()
+                ->whereKey($request->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (!in_array($payment->product_type, [
+                PlanPaymentProduct::SenderPlus,
+                PlanPaymentProduct::ManagerPro,
+            ], true)) {
+                throw new ApiException(
+                    'PLAN_PAYMENT_PRODUCT_INVALID',
+                    'This payment is not an independent subscription.',
+                    409,
+                );
+            }
+
+            if ($payment->status === PlanPaymentStatus::Approved) {
+                if ($payment->applied_at === null) {
+                    throw new ApiException(
+                        'PLAN_PAYMENT_STATE_INVALID',
+                        'Approved payment has no applied timestamp.',
+                        409,
+                    );
+                }
+
+                return $payment->refresh();
+            }
+
+            if ($payment->status !== PlanPaymentStatus::Pending) {
+                throw new ApiException(
+                    'PLAN_PAYMENT_ALREADY_DECIDED',
+                    'This payment request has already been decided.',
+                    409,
+                );
+            }
+
+            $this->assertCleanPendingState($payment);
+
+            $months = $payment->package_months;
+            if ($months === null || !IndependentPlanPackages::isValidMonths($months)) {
+                throw new ApiException(
+                    'PLAN_PAYMENT_PACKAGE_INVALID',
+                    'The stored subscription duration is invalid.',
+                    409,
+                );
+            }
+
+            if ($payment->expected_amount_bdt !== IndependentPlanPackages::priceBdt(
+                $payment->product_type,
+                $months,
+            )) {
+                throw new ApiException(
+                    'PLAN_PAYMENT_AMOUNT_INVALID',
+                    'The stored subscription amount does not match the package price.',
+                    409,
+                );
+            }
+
+            if (ReferralReward::query()
+                ->where('reserved_for_payment_request_id', $payment->id)
+                ->exists()) {
+                throw new ApiException(
+                    'PLAN_PAYMENT_STATE_INVALID',
+                    'Independent subscriptions cannot use referral discounts.',
+                    409,
+                );
+            }
+
+            $now = CarbonImmutable::now('UTC');
+
+            if ($payment->product_type === PlanPaymentProduct::SenderPlus) {
+                if ($payment->beneficiary_user_id === null
+                    || $payment->beneficiary_user_id !== $payment->submitted_by_user_id) {
+                    throw new ApiException(
+                        'PLAN_PAYMENT_BENEFICIARY_INVALID',
+                        'Sender Plus must belong to the submitting user.',
+                        409,
+                    );
+                }
+
+                // Lock user identity across businesses before reading subscription.
+                User::query()
+                    ->whereKey($payment->beneficiary_user_id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                $subscription = SenderSubscription::query()
+                    ->where('user_id', $payment->beneficiary_user_id)
+                    ->first();
+                $tier = PlanLimits::SENDER_PLUS;
+                $identityKey = 'user_id';
+                $identityValue = $payment->beneficiary_user_id;
+                $model = SenderSubscription::class;
+            } else {
+                if ($payment->beneficiary_user_id !== null) {
+                    throw new ApiException(
+                        'PLAN_PAYMENT_BENEFICIARY_INVALID',
+                        'Manager Pro must belong to the business.',
+                        409,
+                    );
+                }
+
+                $subscription = ManagerSubscription::query()
+                    ->where('business_id', $business->id)
+                    ->first();
+                $tier = PlanLimits::MANAGER_PRO;
+                $identityKey = 'business_id';
+                $identityValue = $business->id;
+                $model = ManagerSubscription::class;
+            }
+
+            $activePaid = $subscription !== null
+                && $subscription->tier === $tier
+                && $subscription->access_source === 'paid'
+                && $subscription->access_ends_at !== null
+                && $subscription->access_ends_at->greaterThan($now);
+
+            $startsAt = $activePaid
+                ? ($subscription->access_starts_at ?? $now)
+                : $now;
+            $base = $activePaid
+                ? CarbonImmutable::instance($subscription->access_ends_at)
+                : $now;
+
+            $values = [
+                $identityKey => $identityValue,
+                'tier' => $tier,
+                'access_source' => 'paid',
+                'access_starts_at' => $startsAt,
+                'access_ends_at' => $base->addMonthsNoOverflow($months),
+            ];
+
+            if ($subscription === null) {
+                $model::query()->create($values);
+            } else {
+                $subscription->forceFill($values)->save();
+            }
+
+            $payment->forceFill([
+                'status' => PlanPaymentStatus::Approved,
+                'decided_by_platform_admin_id' => $lockedAdmin->id,
+                'decision_reason' => null,
+                'decided_at' => $now,
+                'applied_at' => $now,
+            ])->save();
+
+            $this->auditLogger->record(
+                'plan_payment.approved',
+                $lockedAdmin->user,
+                $business->id,
+                $payment,
+            );
+
+            return $payment->refresh();
+        }, 3);
     }
 
     public function reject(
