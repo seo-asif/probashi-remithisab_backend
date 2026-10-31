@@ -5,11 +5,12 @@ namespace App\Support\Plans;
 use App\Exceptions\ApiException;
 use App\Models\Business;
 use App\Models\BusinessMonthlyUsage;
-use App\Models\BusinessSubscription;
 use App\Models\Customer;
+use App\Models\ManagerSubscription;
 use App\Models\ManagerTransaction;
-use App\Models\SenderRemittance;
 use App\Models\SenderRecipient;
+use App\Models\SenderRemittance;
+use App\Models\SenderSubscription;
 use App\Models\UserMonthlyUsage;
 use App\Support\Time\BusinessClock;
 use DateTimeImmutable;
@@ -42,12 +43,12 @@ final class PlanQuotaService
             $periodStart,
         );
 
-        $tier = $this->effectiveTier($business, $at);
+        $tier = $this->effectiveSenderTier($userId, $at);
         $limit = PlanLimits::FREE_SENDER_REMITTANCES
          + $usage->sender_remittance_bonus;
 
         if (
-            $tier !== PlanLimits::UNLIMITED
+            $tier !== PlanLimits::SENDER_PLUS
             && $usage->sender_remittances_used >= $limit
         ) {
             $this->limitReached(
@@ -90,12 +91,12 @@ final class PlanQuotaService
             $periodStart,
         );
 
-        $tier = $this->effectiveTier($business, $at);
+        $tier = $this->effectiveManagerTier($business, $at);
         $limit = PlanLimits::FREE_MANAGER_TRANSACTIONS
          + $usage->manager_transaction_bonus;
 
         if (
-            $tier !== PlanLimits::UNLIMITED
+            $tier !== PlanLimits::MANAGER_PRO
             && $usage->manager_transactions_used >= $limit
         ) {
             $this->limitReached(
@@ -120,12 +121,12 @@ final class PlanQuotaService
      * The instant is converted to the BUSINESS timezone first.
      */
 
-/**
- * Check whether this user may have one more active family member.
- *
- * This is a lifetime-created-profile cap, not a monthly counter.
- * Archived (soft-deleted) profiles still consume the original slot.
- */
+    /**
+     * Check whether this user may have one more active family member.
+     *
+     * This is a lifetime-created-profile cap, not a monthly counter.
+     * Archived (soft-deleted) profiles still consume the original slot.
+     */
     public function assertFamilyMemberAvailable(
         Business $business,
         int $userId,
@@ -135,9 +136,9 @@ final class PlanQuotaService
 
         $business = $this->lockBusiness($business);
         $at = $this->instant($at);
-        $tier = $this->effectiveTier($business, $at);
+        $tier = $this->effectiveSenderTier($userId, $at);
 
-        if ($tier === PlanLimits::UNLIMITED) {
+        if ($tier === PlanLimits::SENDER_PLUS) {
             return;
         }
 
@@ -160,12 +161,12 @@ final class PlanQuotaService
         }
     }
 
-/**
- * Check whether this business may have one more active Manager customer.
- *
- * This is a lifetime-created-profile cap, not a monthly counter.
- * Archived (soft-deleted) profiles still consume the original slot.
- */
+    /**
+     * Check whether this business may have one more active Manager customer.
+     *
+     * This is a lifetime-created-profile cap, not a monthly counter.
+     * Archived (soft-deleted) profiles still consume the original slot.
+     */
     public function assertCustomerAvailable(
         Business $business,
         ?DateTimeInterface $at = null,
@@ -174,9 +175,9 @@ final class PlanQuotaService
 
         $business = $this->lockBusiness($business);
         $at = $this->instant($at);
-        $tier = $this->effectiveTier($business, $at);
+        $tier = $this->effectiveManagerTier($business, $at);
 
-        if ($tier === PlanLimits::UNLIMITED) {
+        if ($tier === PlanLimits::MANAGER_PRO) {
             return;
         }
 
@@ -207,7 +208,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (!$this->withinRefundWindow($record)) {
+        if (! $this->withinRefundWindow($record)) {
             return;
         }
 
@@ -240,7 +241,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (!$this->needsReapply($record)) {
+        if (! $this->needsReapply($record)) {
             return;
         }
 
@@ -251,9 +252,9 @@ final class PlanQuotaService
         $period = $this->periodStart($business, $record->created_at);
         $usage = $this->lockUserUsage($business->id, $record->owner_user_id, $period);
 
-        $tier = $this->effectiveTier($business, $at);
+        $tier = $this->effectiveSenderTier($record->owner_user_id, $at);
         $limit = PlanLimits::FREE_SENDER_REMITTANCES + $usage->sender_remittance_bonus;
-        if ($tier !== PlanLimits::UNLIMITED && $usage->sender_remittances_used >= $limit) {
+        if ($tier !== PlanLimits::SENDER_PLUS && $usage->sender_remittances_used >= $limit) {
             $this->limitReached(
                 'PLAN_SENDER_MONTHLY_LIMIT',
                 'Cannot restore: the original Sender monthly allowance is full.',
@@ -274,7 +275,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (!$this->withinRefundWindow($record)) {
+        if (! $this->withinRefundWindow($record)) {
             return;
         }
 
@@ -301,7 +302,7 @@ final class PlanQuotaService
     {
         $this->requireTransaction();
 
-        if (!$this->needsReapply($record)) {
+        if (! $this->needsReapply($record)) {
             return;
         }
 
@@ -312,9 +313,9 @@ final class PlanQuotaService
         $period = $this->periodStart($business, $record->created_at);
         $usage = $this->lockBusinessUsage($business->id, $period);
 
-        $tier = $this->effectiveTier($business, $at);
+        $tier = $this->effectiveManagerTier($business, $at);
         $limit = PlanLimits::FREE_MANAGER_TRANSACTIONS + $usage->manager_transaction_bonus;
-        if ($tier !== PlanLimits::UNLIMITED && $usage->manager_transactions_used >= $limit) {
+        if ($tier !== PlanLimits::MANAGER_PRO && $usage->manager_transactions_used >= $limit) {
             $this->limitReached(
                 'PLAN_MANAGER_MONTHLY_LIMIT',
                 'Cannot restore: the original Manager monthly allowance is full.',
@@ -339,13 +340,13 @@ final class PlanQuotaService
         $now = now();
 
         return $now->greaterThanOrEqualTo($record->created_at)
-            && $now->lessThanOrEqualTo($record->created_at->copy()->addSeconds(600));
+        && $now->lessThanOrEqualTo($record->created_at->copy()->addSeconds(600));
     }
 
     private function needsReapply(SenderRemittance|ManagerTransaction $record): bool
     {
         return $record->quota_refunded_at !== null
-            && $record->quota_refund_reapplied_at === null;
+        && $record->quota_refund_reapplied_at === null;
     }
 
     public function periodStart(
@@ -359,15 +360,26 @@ final class PlanQuotaService
             ->format('Y-m-01');
     }
 
-    private function effectiveTier(
+    private function effectiveSenderTier(
+        int $userId,
+        DateTimeInterface $at,
+    ): string {
+        $subscription = SenderSubscription::query()
+            ->where('user_id', $userId)
+            ->first();
+
+        return PlanResolver::effectiveSenderTier($subscription, $at);
+    }
+
+    private function effectiveManagerTier(
         Business $business,
         DateTimeInterface $at,
     ): string {
-        $subscription = BusinessSubscription::query()
+        $subscription = ManagerSubscription::query()
             ->where('business_id', $business->id)
             ->first();
 
-        return PlanResolver::effectiveTier($subscription, $at);
+        return PlanResolver::effectiveManagerTier($subscription, $at);
     }
 
     private function lockBusiness(Business $business): Business
@@ -383,7 +395,7 @@ final class PlanQuotaService
         string $periodStart,
     ): BusinessMonthlyUsage {
         BusinessMonthlyUsage::query()->firstOrCreate([
-            'business_id'  => $businessId,
+            'business_id' => $businessId,
             'period_start' => $periodStart,
         ]);
 
@@ -400,8 +412,8 @@ final class PlanQuotaService
         string $periodStart,
     ): UserMonthlyUsage {
         UserMonthlyUsage::query()->firstOrCreate([
-            'business_id'  => $businessId,
-            'user_id'      => $userId,
+            'business_id' => $businessId,
+            'user_id' => $userId,
             'period_start' => $periodStart,
         ]);
 
@@ -427,11 +439,11 @@ final class PlanQuotaService
             $message,
             409,
             [
-                'limit'     => $limit,
-                'used'      => $used,
+                'limit' => $limit,
+                'used' => $used,
                 'remaining' => max(0, $limit - $used),
                 'resets_on' => $this->resetsOn($business, $at),
-                'plan'      => $tier,
+                'plan' => $tier,
             ],
         );
     }
@@ -448,10 +460,10 @@ final class PlanQuotaService
             $message,
             409,
             [
-                'limit'     => $limit,
-                'used'      => $used,
+                'limit' => $limit,
+                'used' => $used,
                 'remaining' => max(0, $limit - $used),
-                'plan'      => $tier,
+                'plan' => $tier,
             ],
         );
     }

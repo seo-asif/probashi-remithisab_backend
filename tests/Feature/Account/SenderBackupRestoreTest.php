@@ -3,15 +3,19 @@
 namespace Tests\Feature\Account;
 
 use App\Enums\BusinessRole;
+use App\Models\UserMonthlyUsage;
+use App\Support\Time\BusinessClock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
 
 final class SenderBackupRestoreTest extends TestCase
 {
-    use RefreshDatabase, Phase3Fixtures;
+    use Phase3Fixtures, RefreshDatabase;
 
     private const RESTORE = '/api/v1/account/backup/sender/restore';
+
     private const EXPORT = '/api/v1/account/backup/sender';
 
     private function backup(array $recipients = [], array $goals = [], array $remittances = []): array
@@ -69,9 +73,9 @@ final class SenderBackupRestoreTest extends TestCase
             ->assertJsonPath('data.created_total', 3)
             ->assertJsonPath('data.datasets.remittances.created', 1);
 
-        $recipientId = \Illuminate\Support\Facades\DB::table('sender_recipients')
+        $recipientId = DB::table('sender_recipients')
             ->where('uuid', $recipientUuid)->value('id');
-        $goalId = \Illuminate\Support\Facades\DB::table('savings_goals')
+        $goalId = DB::table('savings_goals')
             ->where('uuid', $goalUuid)->value('id');
         $this->assertDatabaseHas('sender_remittances', [
             'uuid' => '33333333-3333-4333-8333-333333333333',
@@ -152,7 +156,7 @@ final class SenderBackupRestoreTest extends TestCase
 
         foreach (['sender_recipients', 'savings_goals', 'sender_remittances'] as $table) {
             $this->assertNotNull(
-                \Illuminate\Support\Facades\DB::table($table)->value('deleted_at'),
+                DB::table($table)->value('deleted_at'),
                 "Expected a soft-deleted $table record."
             );
         }
@@ -166,10 +170,10 @@ final class SenderBackupRestoreTest extends TestCase
     {
         $business = $this->makeBusiness();
         $owner = $this->actAs($business);
-        \App\Models\UserMonthlyUsage::create([
+        UserMonthlyUsage::create([
             'business_id' => $business->id,
             'user_id' => $owner->id,
-            'period_start' => \App\Support\Time\BusinessClock::for($business)
+            'period_start' => BusinessClock::for($business)
                 ->toLocal(now())->format('Y-m-01'),
             'sender_remittances_used' => 20,
         ]);
@@ -374,7 +378,7 @@ final class SenderBackupRestoreTest extends TestCase
             'owner_user_id' => $first->id,
             'business_id' => $business->id,
         ]);
-        $this->assertNotNull(\Illuminate\Support\Facades\DB::table('sender_remittances')
+        $this->assertNotNull(DB::table('sender_remittances')
             ->where('uuid', $privateUuid)->value('deleted_at'));
         $this->assertDatabaseHas('user_monthly_usage', [
             'business_id' => $business->id,
@@ -442,9 +446,9 @@ final class SenderBackupRestoreTest extends TestCase
             'business_id' => $business->id,
             'sender_remittances_used' => 1,
         ]);
-        $this->assertNotNull(\Illuminate\Support\Facades\DB::table('sender_recipients')
+        $this->assertNotNull(DB::table('sender_recipients')
             ->where('uuid', $familyUuid)->value('deleted_at'));
-        $this->assertNotNull(\Illuminate\Support\Facades\DB::table('sender_remittances')
+        $this->assertNotNull(DB::table('sender_remittances')
             ->where('uuid', $remittanceUuid)->value('deleted_at'));
 
         $backup['datasets']['recipients'][0]['name'] = 'Changed Name';
@@ -460,9 +464,9 @@ final class SenderBackupRestoreTest extends TestCase
         $this->assertDatabaseHas('sender_recipients', [
             'uuid' => $familyUuid, 'name' => 'Original Family',
         ]);
-        $this->assertNotNull(\Illuminate\Support\Facades\DB::table('sender_recipients')
+        $this->assertNotNull(DB::table('sender_recipients')
             ->where('uuid', $familyUuid)->value('deleted_at'));
-        $this->assertNotNull(\Illuminate\Support\Facades\DB::table('sender_remittances')
+        $this->assertNotNull(DB::table('sender_remittances')
             ->where('uuid', $remittanceUuid)->value('deleted_at'));
         $this->assertDatabaseHas('user_monthly_usage', [
             'user_id' => $owner->id,
@@ -475,9 +479,9 @@ final class SenderBackupRestoreTest extends TestCase
     {
         $business = $this->makeBusiness();
         $owner = $this->actAs($business);
-        $period = \App\Support\Time\BusinessClock::for($business)
+        $period = BusinessClock::for($business)
             ->toLocal(now())->format('Y-m-01');
-        \App\Models\UserMonthlyUsage::create([
+        UserMonthlyUsage::create([
             'business_id' => $business->id,
             'user_id' => $owner->id,
             'period_start' => $period,
@@ -509,16 +513,16 @@ final class SenderBackupRestoreTest extends TestCase
     {
         $business = $this->makeBusiness();
         $this->actAs($business);
-        for ($i = 1; $i <= 20; $i++) {
+        for ($i = 1; $i <= 5; $i++) {
             $member = $this->recipient([
-                'name' => 'Family ' . chr(64 + $i),
+                'name' => 'Family '.chr(64 + $i),
                 'phone' => null,
             ]);
-            $this->deleteJson('/api/v1/sender-recipients/' . $member['id'])
+            $this->deleteJson('/api/v1/sender-recipients/'.$member['id'])
                 ->assertSuccessful();
         }
 
-        $this->assertDatabaseCount('sender_recipients', 20);
+        $this->assertDatabaseCount('sender_recipients', 5);
         $newUuid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
         $this->postJson(self::RESTORE, $this->backup([
             ['uuid' => $newUuid, 'name' => 'New Family'],
@@ -526,7 +530,7 @@ final class SenderBackupRestoreTest extends TestCase
             ->assertJsonPath('code', 'PLAN_FAMILY_LIMIT');
 
         $this->assertDatabaseMissing('sender_recipients', ['uuid' => $newUuid]);
-        $this->assertDatabaseCount('sender_recipients', 20);
+        $this->assertDatabaseCount('sender_recipients', 5);
     }
 
     public function test_duplicate_phone_in_same_backup_rejects_with_row_error_and_rolls_back(): void
@@ -563,7 +567,7 @@ final class SenderBackupRestoreTest extends TestCase
     {
         $this->actAs($this->makeBusiness());
         $saved = $this->recipient(['name' => 'Mother', 'phone' => '01811111111']);
-        $this->deleteJson('/api/v1/sender-recipients/' . $saved['id'])->assertSuccessful();
+        $this->deleteJson('/api/v1/sender-recipients/'.$saved['id'])->assertSuccessful();
 
         $new = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
         $this->postJson(self::RESTORE, $this->backup([

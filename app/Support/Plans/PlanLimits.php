@@ -22,7 +22,7 @@ final class PlanLimits
 
     public const FREE_MANAGER_TRANSACTIONS = 20;
 
-    public const FREE_FAMILY_MEMBERS = 20;
+    public const FREE_FAMILY_MEMBERS = 5;
 
     public const FREE_CUSTOMERS = 10;
 

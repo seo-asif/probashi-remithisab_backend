@@ -60,7 +60,7 @@ class PlanAllowanceResponseTest extends TestCase
             )
             ->assertJsonPath(
                 'data.plan.allowances.family_members.limit',
-                20,
+                5,
             )
             ->assertJsonPath(
                 'data.plan.allowances.manager_transactions.limit',
@@ -205,7 +205,7 @@ class PlanAllowanceResponseTest extends TestCase
             )
             ->assertJsonPath(
                 'data.plan.allowances.family_members.remaining',
-                17,
+                2,
             )
             ->assertJsonPath(
                 'data.plan.allowances.customers.used',
@@ -226,7 +226,7 @@ class PlanAllowanceResponseTest extends TestCase
             )
             ->assertJsonPath(
                 'data.plan.allowances.family_members.remaining',
-                18,
+                3,
             )
             ->assertJsonPath(
                 'data.plan.allowances.customers.used',

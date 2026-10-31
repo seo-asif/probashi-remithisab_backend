@@ -6,7 +6,9 @@ use App\Enums\BusinessRole;
 use App\Models\Business;
 use App\Models\BusinessSubscription;
 use App\Models\Customer;
+use App\Models\ManagerSubscription;
 use App\Models\SenderRecipient;
+use App\Models\SenderSubscription;
 use App\Models\User;
 use App\Support\Plans\PlanLimits;
 use App\Support\Tenancy\CurrentBusiness;
@@ -18,20 +20,20 @@ class ActiveRecordLimitTest extends TestCase
 {
     use Phase3Fixtures, RefreshDatabase;
 
-    public function test_family_limit_blocks_twenty_first_and_archive_does_not_free_quota(): void
+    public function test_family_limit_blocks_sixth_and_archive_does_not_free_quota(): void
     {
         $business = $this->makeBusiness();
         $user = $this->actAs($business);
 
-        $family = $this->seedFamily($business, $user, 20);
+        $family = $this->seedFamily($business, $user, 5);
 
         $this->postJson('/api/v1/sender-recipients', [
             'name' => 'Extra Family',
         ])
             ->assertStatus(409)
             ->assertJsonPath('code', 'PLAN_FAMILY_LIMIT')
-            ->assertJsonPath('data.limit', 20)
-            ->assertJsonPath('data.used', 20)
+            ->assertJsonPath('data.limit', 5)
+            ->assertJsonPath('data.used', 5)
             ->assertJsonPath('data.remaining', 0);
 
         $deleted = $family[0];
@@ -44,14 +46,14 @@ class ActiveRecordLimitTest extends TestCase
             'name' => 'New Family',
         ])->assertStatus(409)
             ->assertJsonPath('code', 'PLAN_FAMILY_LIMIT')
-            ->assertJsonPath('data.used', 20);
+            ->assertJsonPath('data.used', 5);
 
         $this->postJson(
             "/api/v1/sender-recipients/{$deleted->uuid}/restore"
         )->assertOk();
 
         $this->getJson('/api/v1/sender-recipients')
-            ->assertJsonPath('data.meta.total', 20);
+            ->assertJsonPath('data.meta.total', 5);
     }
 
     public function test_family_limit_is_per_user_not_per_business(): void
@@ -68,7 +70,7 @@ class ActiveRecordLimitTest extends TestCase
             BusinessRole::Operator
         );
 
-        $this->seedFamily($business, $first, 20);
+        $this->seedFamily($business, $first, 5);
 
         $this->login($first);
 
@@ -159,14 +161,22 @@ class ActiveRecordLimitTest extends TestCase
             ->assertJsonPath('data.meta.total', 1);
     }
 
-    public function test_unlimited_bypasses_family_and_customer_active_limits(): void
+    public function test_sender_plus_and_manager_pro_bypass_their_own_profile_limits(): void
     {
         $business = $this->makeBusiness();
         $user = $this->actAs($business);
 
-        BusinessSubscription::create([
+        SenderSubscription::create([
+            'user_id' => $user->id,
+            'tier' => PlanLimits::SENDER_PLUS,
+            'access_source' => 'manual',
+            'access_starts_at' => now()->subMinute(),
+            'access_ends_at' => now()->addDay(),
+        ]);
+
+        ManagerSubscription::create([
             'business_id' => $business->id,
-            'tier' => PlanLimits::UNLIMITED,
+            'tier' => PlanLimits::MANAGER_PRO,
             'access_source' => 'manual',
             'access_starts_at' => now()->subMinute(),
             'access_ends_at' => now()->addDay(),

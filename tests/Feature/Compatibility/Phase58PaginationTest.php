@@ -2,6 +2,8 @@
 
 namespace Tests\Feature\Compatibility;
 
+use App\Models\SenderSubscription;
+use App\Support\Plans\PlanLimits;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\Phase3Fixtures;
 use Tests\TestCase;
@@ -12,12 +14,22 @@ class Phase58PaginationTest extends TestCase
 
     public function test_family_defaults_to_ten_newest_first_and_uses_total_for_load_more(): void
     {
-        $this->actAs($this->makeBusiness());
+        $business = $this->makeBusiness();
+        $user = $this->actAs($business);
+
+        SenderSubscription::create([
+            'user_id' => $user->id,
+            'tier' => PlanLimits::SENDER_PLUS,
+            'access_source' => 'manual',
+            'access_starts_at' => now()->subMinute(),
+            'access_ends_at' => now()->addDay(),
+        ]);
+
         $ids = [];
 
         for ($i = 1; $i <= 12; $i++) {
             $ids[] = $this->recipient([
-                'name' => 'Member ' . chr(64 + $i),
+                'name' => 'Member '.chr(64 + $i),
                 'phone' => null,
             ])['id'];
         }
@@ -55,7 +67,7 @@ class Phase58PaginationTest extends TestCase
 
         for ($i = 1; $i <= 3; $i++) {
             $ids[] = $this->postJson('/api/v1/customers', [
-                'name' => 'Customer ' . chr(64 + $i),
+                'name' => 'Customer '.chr(64 + $i),
                 'phone' => "0171234500{$i}",
             ])->assertCreated()->json('data.id');
         }
