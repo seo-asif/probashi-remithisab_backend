@@ -5,6 +5,8 @@ namespace Tests\Feature\Reports;
 use App\Enums\BusinessRole;
 use App\Models\Business;
 use App\Models\BusinessSubscription;
+use App\Models\SenderSubscription;
+use App\Models\ManagerSubscription;
 use App\Support\Plans\PlanLimits;
 use App\Support\Reports\ManagerReport;
 use App\Support\Reports\ReportPeriod;
@@ -89,11 +91,12 @@ final class PdfExportTest extends TestCase
         }
     }
 
-    public function test_unlimited_account_can_export_all_time_pdf(): void
+    public function test_paid_modes_can_export_all_time_pdf(): void
     {
         $business = $this->makeBusiness();
         $this->actAs($business);
-        $this->unlimited($business);
+        $this->senderPlus();
+        $this->managerPro($business);
 
         foreach (['sender', 'manager'] as $mode) {
             $response = $this->get(
@@ -107,12 +110,12 @@ final class PdfExportTest extends TestCase
         }
     }
 
-    public function test_expired_unlimited_loses_extended_period_access(): void
+    public function test_expired_sender_plus_loses_extended_period_access(): void
     {
         $business = $this->makeBusiness();
         $this->actAs($business);
 
-        $subscription = $this->unlimited($business);
+        $subscription = $this->senderPlus();
 
         $this->get('/api/v1/reports/sender/pdf?period=all')
             ->assertOk();
@@ -129,7 +132,7 @@ final class PdfExportTest extends TestCase
     {
         $business = $this->makeBusiness();
         $this->actAs($business);
-        $this->unlimited($business);
+        $this->senderPlus();
 
         foreach ([
             '?period=custom',
@@ -248,14 +251,51 @@ final class PdfExportTest extends TestCase
         );
     }
 
-    private function unlimited(Business $business): BusinessSubscription
+    public function test_legacy_unlimited_cannot_unlock_extended_pdf_periods(): void
     {
-        return BusinessSubscription::create([
-            'business_id'      => $business->id,
-            'tier'             => PlanLimits::UNLIMITED,
-            'access_source'    => 'manual',
+        $business = $this->makeBusiness();
+        $this->actAs($business);
+        BusinessSubscription::create([
+            'business_id' => $business->id,
+            'tier' => PlanLimits::UNLIMITED,
+            'access_source' => 'manual',
             'access_starts_at' => now()->subDay(),
-            'access_ends_at'   => now()->addDay(),
+            'access_ends_at' => now()->addDay(),
+        ]);
+        $this->getJson('/api/v1/reports/sender/pdf?period=all')->assertForbidden();
+        $this->getJson('/api/v1/reports/manager/pdf?period=all')->assertForbidden();
+    }
+
+    public function test_extended_pdf_permissions_are_mode_specific(): void
+    {
+        $business = $this->makeBusiness();
+        $this->actAs($business);
+        $this->senderPlus();
+        $this->get('/api/v1/reports/sender/pdf?period=all')->assertOk();
+        $this->getJson('/api/v1/reports/manager/pdf?period=all')->assertForbidden();
+        $this->managerPro($business);
+        $this->get('/api/v1/reports/manager/pdf?period=all')->assertOk();
+    }
+
+    private function senderPlus(): SenderSubscription
+    {
+        return SenderSubscription::create([
+            'user_id' => auth()->id(),
+            'tier' => PlanLimits::SENDER_PLUS,
+            'access_source' => 'manual',
+            'access_starts_at' => now()->subDay(),
+            'access_ends_at' => now()->addDay(),
+        ]);
+    }
+
+    private function managerPro(Business $business): ManagerSubscription
+    {
+        return ManagerSubscription::create([
+            'business_id' => $business->id,
+            'tier' => PlanLimits::MANAGER_PRO,
+            'access_source' => 'manual',
+            'access_starts_at' => now()->subDay(),
+            'access_ends_at' => now()->addDay(),
         ]);
     }
 }

@@ -14,7 +14,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
-/** CSV is an authenticated, Unlimited-only export; ordinary report JSON remains unchanged. */
+/** CSV is an authenticated, mode-specific paid export; ordinary report JSON remains unchanged. */
 final class CsvExportController extends Controller
 {
     public function __construct(
@@ -43,9 +43,11 @@ final class CsvExportController extends Controller
 
         // Check the current, effective subscription server-side on every download.
         abort_unless(
-            $this->plans->snapshot($business, $userId)['entitlements']['csv_export'],
+            ($mode === 'sender'
+                ? $this->plans->senderSnapshot($business, $userId)
+                : $this->plans->managerSnapshot($business, $userId))['entitlements']['csv_export'],
             403,
-            'CSV export requires an active Unlimited plan.',
+            'CSV export requires an active subscription for this mode.',
         );
 
         $datasets = $mode === 'sender'

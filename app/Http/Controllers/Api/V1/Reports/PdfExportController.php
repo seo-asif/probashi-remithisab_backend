@@ -40,7 +40,12 @@ final class PdfExportController extends Controller
     {
         $business = $this->current->get();
         $userId = (int) $request->user()->getKey();
-        $entitlements = $this->plans->snapshot($business, $userId)['entitlements'];
+        // Student PDF remains on the legacy path until its route is retired.
+        $entitlements = match ($mode) {
+            'sender' => $this->plans->senderSnapshot($business, $userId)['entitlements'],
+            'manager' => $this->plans->managerSnapshot($business, $userId)['entitlements'],
+            default => $this->plans->snapshot($business, $userId)['entitlements'],
+        };
 
         abort_unless($entitlements['monthly_pdf'] ?? false, 403);
 
@@ -64,7 +69,7 @@ final class PdfExportController extends Controller
 
         $period = ReportPeriod::fromQuery($data, BusinessClock::for($business), default: 'this_month');
         if ($period->period !== 'this_month') {
-            abort_unless($entitlements['custom_date_range'] ?? false, 403, 'This PDF period requires Unlimited.');
+            abort_unless($entitlements['custom_date_range'] ?? false, 403, 'This PDF period requires an active subscription for this mode.');
         }
 
         return $this->exports->download($mode, $period, $business, $userId);
