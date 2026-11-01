@@ -2,8 +2,10 @@
 
 namespace App\Http\Requests\Auth;
 
+use App\Support\Auth\DisposableEmailService;
 use App\Support\Auth\PasswordRules;
 use App\Support\Sender\SenderValidation;
+use Closure;
 
 class RegisterRequest extends AuthRequest
 {
@@ -31,7 +33,22 @@ class RegisterRequest extends AuthRequest
     {
         return [
             'name'           => ['required', 'string', 'max:120'],
-            'email'          => ['required', 'email', 'max:255', 'unique:users,email'],
+            'email'          => [
+                'required',
+                'email',
+                'max:255',
+                'unique:users,email',
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    if (
+                        is_string($value)
+                        && DisposableEmailService::isDisposable($value)
+                    ) {
+                        $fail(
+                            'Temporary email addresses are not allowed. Please use your regular email address.'
+                        );
+                    }
+                },
+            ],
             'password'       => ['required', 'confirmed', PasswordRules::default()],
             'business_name'  => ['required', 'string', 'max:120'],
             'business_phone' => ['nullable', 'string', 'regex:/^\+?\d{1,18}$/'],

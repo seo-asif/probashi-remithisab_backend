@@ -8,6 +8,7 @@ use App\Models\Business;
 use App\Models\BusinessMembership;
 use App\Models\SocialAccount;
 use App\Models\User;
+use App\Support\Auth\DisposableEmailService;
 use App\Support\Auth\Google\GoogleIdTokenVerifier;
 use App\Support\Auth\Google\InvalidGoogleTokenException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -50,12 +51,12 @@ class GoogleAuthService
                 ['email' => $claims['email']],
             );
         } else {
-            $user  = $this->createAccount($claims);
+            $user = $this->createAccount($claims);
             $isNew = true;
         }
 
         $membership = $this->resolver->forUser($user);
-        $data       = $this->session->issue($user, $membership, $deviceName);
+        $data = $this->session->issue($user, $membership, $deviceName);
 
         $this->audit->record($isNew ? 'auth.google_registered' : 'auth.google_login', $user, $membership->business_id, $user);
 
@@ -112,7 +113,7 @@ class GoogleAuthService
             throw new ApiException('GOOGLE_TOKEN_INVALID', 'Google sign-in failed. Please try again.', 401);
         }
 
-        $sub   = (string) ($claims['sub'] ?? '');
+        $sub = (string) ($claims['sub'] ?? '');
         $email = mb_strtolower(trim((string) ($claims['email'] ?? '')));
 
         if ($sub === '' || $email === '') {
@@ -129,10 +130,18 @@ class GoogleAuthService
     /** A new Google user gets an account and a default business. The timezone can be changed later. */
     private function createAccount(array $claims): User
     {
+        if (DisposableEmailService::isDisposable($claims['email'])) {
+            throw new ApiException(
+                'DISPOSABLE_EMAIL_NOT_ALLOWED',
+                'Temporary email addresses are not allowed. Please use your regular email address.',
+                422,
+            );
+        }
+
         try {
             return DB::transaction(function () use ($claims) {
                 $user = User::create(['name' => Str::limit($claims['name'], 120, ''), 'email' => $claims['email'], 'password' => null]);
-                $user->forceFill(['email_verified_at' => now()])->save();   // Google already verified this email
+                $user->forceFill(['email_verified_at' => now()])->save(); // Google already verified this email
 
                 $business = Business::create([
                     'name'     => Str::limit($claims['name'] . "'s business", 120, ''),

@@ -168,4 +168,48 @@ class GoogleAuthTest extends TestCase
             ->assertStatus(422)->assertJsonPath('code', 'CANNOT_UNLINK_LAST_LOGIN_METHOD');
         $this->assertDatabaseCount('social_accounts', 1);
     }
+
+    public function test_new_google_registration_rejects_disposable_email(): void
+    {
+        $this->google->claims = $this->claims([
+            'email' => 'test@mailinator.com',
+        ]);
+
+        $this->signIn()
+            ->assertStatus(422)
+            ->assertJsonPath(
+                'code',
+                'DISPOSABLE_EMAIL_NOT_ALLOWED'
+            );
+
+        $this->assertDatabaseCount('users', 0);
+        $this->assertDatabaseCount('businesses', 0);
+        $this->assertDatabaseCount('social_accounts', 0);
+        $this->assertDatabaseCount('personal_access_tokens', 0);
+    }
+
+    public function test_existing_google_account_can_log_in_with_blocked_domain(): void
+    {
+        $user = $this->makeUser([
+    'email' => 'existing@mailinator.com',
+]);
+
+        SocialAccount::create([
+            'user_id'          => $user->id,
+            'provider'         => 'google',
+            'provider_user_id' => 'google-123',
+            'email'            => 'existing@mailinator.com',
+        ]);
+
+        $this->google->claims = $this->claims([
+            'email' => 'existing@mailinator.com',
+        ]);
+
+        $this->signIn()
+            ->assertOk()
+            ->assertJsonPath('data.is_new_account', false);
+
+        $this->assertDatabaseCount('users', 1);
+        $this->assertDatabaseCount('social_accounts', 1);
+    }
 }

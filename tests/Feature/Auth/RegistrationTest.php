@@ -90,13 +90,13 @@ class RegistrationTest extends TestCase
         Mail::fake();
 
         $cases = [
-            'name'            => ['name' => ''],
-            'email'           => ['email' => 'not-an-email'],
-            'password'        => ['password' => 'short1', 'password_confirmation' => 'short1'],
-            'business_name'   => ['business_name' => ''],
-            'country_code'    => ['country_code' => 'FJI'],
-            'timezone'        => ['timezone' => 'Mars/Phobos'],
-            'business_phone'  => ['business_phone' => 'abc'],
+            'name'           => ['name' => ''],
+            'email'          => ['email' => 'not-an-email'],
+            'password'       => ['password' => 'short1', 'password_confirmation' => 'short1'],
+            'business_name'  => ['business_name' => ''],
+            'country_code'   => ['country_code' => 'FJI'],
+            'timezone'       => ['timezone' => 'Mars/Phobos'],
+            'business_phone' => ['business_phone' => 'abc'],
         ];
 
         foreach ($cases as $field => $override) {
@@ -129,4 +129,49 @@ class RegistrationTest extends TestCase
             ->assertStatus(429)
             ->assertJsonPath('code', 'TOO_MANY_REQUESTS');
     }
+
+    public function test_disposable_email_is_rejected_without_creating_an_account(): void
+    {
+        Mail::fake();
+
+        $this->postJson(
+            '/api/v1/auth/register',
+            $this->registerPayload([
+                'email' => 'test@mailinator.com',
+            ])
+        )
+            ->assertStatus(422)
+            ->assertJsonPath('code', 'VALIDATION_FAILED')
+            ->assertJsonValidationErrors(['email']);
+
+        $this->assertDatabaseCount('users', 0);
+        $this->assertDatabaseCount('businesses', 0);
+        $this->assertDatabaseCount('otp_codes', 0);
+
+        Mail::assertNothingSent();
+    }
+
+    public function test_regular_email_registration_remains_allowed(): void
+    {
+        Mail::fake();
+
+        $this->postJson(
+            '/api/v1/auth/register',
+            $this->registerPayload([
+                'email' => 'newuser@gmail.com',
+            ])
+        )
+            ->assertStatus(201)
+            ->assertJsonPath(
+                'data.email_verification_required',
+                true
+            );
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'newuser@gmail.com',
+        ]);
+
+        Mail::assertSent(OtpMail::class, 1);
+    }
+
 }
