@@ -14,6 +14,7 @@ use App\Models\OtpCode;
 use App\Models\User;
 use App\Services\Account\AppSettingsService;
 use App\Services\Auth\AuditLogger;
+use App\Services\Auth\DeviceRegistrationService;
 use App\Services\Auth\OtpService;
 use App\Support\Auth\OtpTimings;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -23,14 +24,25 @@ use Illuminate\Validation\ValidationException;
 
 class RegisterController extends Controller
 {
-    /** Creates the account, the business and the owner membership together. No login token until the email is verified. */
-    public function __invoke(RegisterRequest $request, OtpService $otp, AuditLogger $audit): JsonResponse
-    {
+    /**
+     * Creates the account, business, membership and device reservation together.
+     * No login token until the email is verified.
+     */
+    public function __invoke(
+        RegisterRequest $request,
+        OtpService $otp,
+        AuditLogger $audit,
+        DeviceRegistrationService $devices
+    ): JsonResponse {
         $v = $request->validated();
 
         try {
-            [$user, $business] = DB::transaction(function () use ($v) {
-                $user = User::create(['name' => $v['name'], 'email' => $v['email'], 'password' => $v['password']]);
+            [$user, $business] = DB::transaction(function () use ($v, $devices) {
+                $user = User::create([
+                    'name'     => $v['name'],
+                    'email'    => $v['email'],
+                    'password' => $v['password'],
+                ]);
 
                 $business = Business::create([
                     'name'         => $v['business_name'],
@@ -39,13 +51,28 @@ class RegisterController extends Controller
                     'timezone'     => $v['timezone'],
                 ]);
 
-                BusinessMembership::create(['business_id' => $business->id, 'user_id' => $user->id, 'role' => BusinessRole::Owner]);
+                BusinessMembership::create([
+                    'business_id' => $business->id,
+                    'user_id'     => $user->id,
+                    'role'        => BusinessRole::Owner,
+                ]);
+
+                // Reserve one device slot for 24 hours.
+                // A failure rolls back the entire registration transaction.
+                $devices->reserve($user, $v['android_id']);
 
                 return [$user, $business];
-            });
-        } catch (UniqueConstraintViolationException) {
-            // two registrations with the same email at the same moment
-            throw ValidationException::withMessages(['email' => ['This email is already registered. Try logging in, or ask for a new verification code.']]);
+            }, 3);
+        } catch (UniqueConstraintViolationException $exception) {
+            if (!User::query()->where('email', $v['email'])->exists()) {
+                throw $exception;
+            }
+
+            throw ValidationException::withMessages([
+                'email' => [
+                    'This email is already registered. Try logging in, or ask for a new verification code.',
+                ],
+            ]);
         }
 
         $otp->issue($user, OtpCode::PURPOSE_VERIFY_EMAIL);

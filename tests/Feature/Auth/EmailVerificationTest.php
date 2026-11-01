@@ -5,6 +5,7 @@ namespace Tests\Feature\Auth;
 use App\Models\OtpCode;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Laravel\Sanctum\Sanctum;
 use Tests\Support\AuthHelpers;
@@ -153,4 +154,100 @@ class EmailVerificationTest extends TestCase
 
         $this->getJson('/api/v1/me')->assertStatus(403)->assertJsonPath('code', 'EMAIL_NOT_VERIFIED');
     }
+
+    public function test_legacy_account_can_verify_email_without_device_record(): void
+    {
+        config()->set(
+            'registration_devices.enforcement_started_at',
+            '2026-11-01 00:00:00'
+        );
+
+        Mail::fake();
+
+        $user = $this->makeUnverifiedUser([
+            'email' => 'asif@example.com',
+        ]);
+
+        $user->forceFill([
+            'created_at' => '2026-10-01 00:00:00',
+        ])->save();
+
+        app(\App\Services\Auth\OtpService::class)->issue(
+            $user,
+            OtpCode::PURPOSE_VERIFY_EMAIL
+        );
+
+        $code = $this->lastOtp();
+
+        $this->verify($code)->assertOk();
+
+        $this->assertNotNull($user->fresh()->email_verified_at);
+
+        $this->assertDatabaseCount('device_registrations', 0);
+    }
+
+    public function test_new_account_without_device_record_cannot_verify_email(): void
+    {
+        config()->set(
+            'registration_devices.enforcement_started_at',
+            '2026-10-01 00:00:00'
+        );
+
+        $code = $this->register();
+
+        $user = User::where('email', 'asif@example.com')->firstOrFail();
+
+        DB::table('device_registrations')
+            ->where('user_id', $user->id)
+            ->delete();
+
+        $this->verify($code)
+            ->assertStatus(422)
+            ->assertJsonPath('code', 'DEVICE_REGISTRATION_REQUIRED');
+
+        $this->assertNull($user->fresh()->email_verified_at);
+
+        $this->assertNull(OtpCode::first()->consumed_at);
+    }
+
+    public function test_expired_device_reservation_cannot_verify_email(): void
+    {
+        $code = $this->register();
+
+        $user = User::where('email', 'asif@example.com')->firstOrFail();
+
+        DB::table('device_registrations')
+            ->where('user_id', $user->id)
+            ->update([
+                'reserved_until' => now()->subMinute(),
+            ]);
+
+        $this->verify($code)
+            ->assertStatus(422)
+            ->assertJsonPath('code', 'DEVICE_RESERVATION_EXPIRED');
+
+        $this->assertNull($user->fresh()->email_verified_at);
+
+        $this->assertNull(OtpCode::first()->consumed_at);
+    }
+
+    public function test_successful_email_verification_confirms_device_permanently(): void
+    {
+        $code = $this->register();
+
+        $user = User::where('email', 'asif@example.com')->firstOrFail();
+
+        $this->verify($code)->assertOk();
+
+        $registration = DB::table('device_registrations')
+            ->where('user_id', $user->id)
+            ->first();
+
+        $this->assertNotNull($registration);
+        $this->assertNotNull($registration->confirmed_at);
+        $this->assertNull($registration->reserved_until);
+
+        $this->assertNotNull($user->fresh()->email_verified_at);
+    }
+
 }

@@ -10,9 +10,17 @@ use Illuminate\Http\JsonResponse;
 
 class GoogleSignInController extends Controller
 {
-    public function __invoke(GoogleSignInRequest $request, GoogleAuthService $google): JsonResponse
-    {
-        $data = $google->signIn($request->validated('id_token'), $request->validated('device_name'));
+    public function __invoke(
+        GoogleSignInRequest $request,
+        GoogleAuthService $google
+    ): JsonResponse {
+        $v = $request->validated();
+
+        $data = $google->signIn(
+            $v['id_token'],
+            $v['device_name'] ?? null,
+            $v['android_id'] ?? null
+        );
 
         return ApiResponse::success($data, 'Login successful.');
     }

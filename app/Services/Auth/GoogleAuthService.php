@@ -16,8 +16,12 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
- * Google sign-in. The app sends a Google ID token; we trust nothing the app says about identity.
- * An existing password account with the same email is NEVER merged automatically.
+ * Google sign-in.
+ *
+ * The app sends a Google ID token. Google identity is verified
+ * server-side before an account is accessed or created.
+ *
+ * Existing password accounts are never merged automatically.
  */
 class GoogleAuthService
 {
@@ -26,12 +30,18 @@ class GoogleAuthService
         private MembershipResolver $resolver,
         private AuthSession $session,
         private AuditLogger $audit,
+        private DeviceRegistrationService $devices,
     ) {
     }
 
-    /** @return array<string, mixed> login data, plus is_new_account */
-    public function signIn(string $idToken, ?string $deviceName): array
-    {
+    /**
+     * @return array<string, mixed>
+     */
+    public function signIn(
+        string $idToken,
+        ?string $deviceName,
+        ?string $androidId = null
+    ): array {
         $claims = $this->claims($idToken);
 
         $social = SocialAccount::query()
@@ -42,23 +52,47 @@ class GoogleAuthService
         $isNew = false;
 
         if ($social) {
+            // Existing Google account: no registration limit.
             $user = $social->user;
-        } elseif (User::query()->where('email', $claims['email'])->exists()) {
+        } elseif (
+            User::query()
+                ->where('email', $claims['email'])
+                ->exists()
+        ) {
             throw new ApiException(
                 'ACCOUNT_LINK_REQUIRED',
                 'An account with this email already exists. Log in with your password, then link Google from your account settings.',
                 409,
-                ['email' => $claims['email']],
+                ['email' => $claims['email']]
             );
         } else {
-            $user = $this->createAccount($claims);
+            // Android ID is required only for new registrations.
+            if ($androidId === null || $androidId === '') {
+                throw new ApiException(
+                    'DEVICE_ID_REQUIRED',
+                    'A valid Android device identifier is required for registration.',
+                    422
+                );
+            }
+
+            $user = $this->createAccount($claims, $androidId);
             $isNew = true;
         }
 
         $membership = $this->resolver->forUser($user);
-        $data = $this->session->issue($user, $membership, $deviceName);
 
-        $this->audit->record($isNew ? 'auth.google_registered' : 'auth.google_login', $user, $membership->business_id, $user);
+        $data = $this->session->issue(
+            $user,
+            $membership,
+            $deviceName
+        );
+
+        $this->audit->record(
+            $isNew ? 'auth.google_registered' : 'auth.google_login',
+            $user,
+            $membership->business_id,
+            $user
+        );
 
         return $data + ['is_new_account' => $isNew];
     }
@@ -72,8 +106,17 @@ class GoogleAuthService
             ->where('provider_user_id', $claims['sub'])
             ->exists();
 
-        if ($taken || $user->socialAccounts()->where('provider', SocialAccount::PROVIDER_GOOGLE)->exists()) {
-            throw new ApiException('GOOGLE_ALREADY_LINKED', 'This Google account, or a Google account for you, is already linked.', 409);
+        if (
+            $taken ||
+            $user->socialAccounts()
+            ->where('provider', SocialAccount::PROVIDER_GOOGLE)
+            ->exists()
+        ) {
+            throw new ApiException(
+                'GOOGLE_ALREADY_LINKED',
+                'This Google account, or a Google account for you, is already linked.',
+                409
+            );
         }
 
         try {
@@ -83,10 +126,19 @@ class GoogleAuthService
                 'email'            => $claims['email'],
             ]);
         } catch (UniqueConstraintViolationException) {
-            throw new ApiException('GOOGLE_ALREADY_LINKED', 'This Google account, or a Google account for you, is already linked.', 409);
+            throw new ApiException(
+                'GOOGLE_ALREADY_LINKED',
+                'This Google account, or a Google account for you, is already linked.',
+                409
+            );
         }
 
-        $this->audit->record('auth.google_linked', $user, null, $user);
+        $this->audit->record(
+            'auth.google_linked',
+            $user,
+            null,
+            $user
+        );
     }
 
     public function unlink(User $user): void
@@ -95,60 +147,127 @@ class GoogleAuthService
             throw new ApiException(
                 'CANNOT_UNLINK_LAST_LOGIN_METHOD',
                 'Google is your only way to log in. Create a password first with "Forgot password", then unlink Google.',
-                422,
+                422
             );
         }
 
-        $user->socialAccounts()->where('provider', SocialAccount::PROVIDER_GOOGLE)->delete();
+        $user->socialAccounts()
+            ->where('provider', SocialAccount::PROVIDER_GOOGLE)
+            ->delete();
 
-        $this->audit->record('auth.google_unlinked', $user, null, $user);
+        $this->audit->record(
+            'auth.google_unlinked',
+            $user,
+            null,
+            $user
+        );
     }
 
-    /** @return array{sub: string, email: string, name: string} */
+    /**
+     * @return array{
+     *     sub: string,
+     *     email: string,
+     *     name: string
+     * }
+     */
     private function claims(string $idToken): array
     {
         try {
             $claims = $this->verifier->verify($idToken);
         } catch (InvalidGoogleTokenException) {
-            throw new ApiException('GOOGLE_TOKEN_INVALID', 'Google sign-in failed. Please try again.', 401);
+            throw new ApiException(
+                'GOOGLE_TOKEN_INVALID',
+                'Google sign-in failed. Please try again.',
+                401
+            );
         }
 
         $sub = (string) ($claims['sub'] ?? '');
-        $email = mb_strtolower(trim((string) ($claims['email'] ?? '')));
+
+        $email = mb_strtolower(
+            trim((string) ($claims['email'] ?? ''))
+        );
 
         if ($sub === '' || $email === '') {
-            throw new ApiException('GOOGLE_TOKEN_INVALID', 'Google sign-in failed. Please try again.', 401);
+            throw new ApiException(
+                'GOOGLE_TOKEN_INVALID',
+                'Google sign-in failed. Please try again.',
+                401
+            );
         }
 
-        if (!filter_var($claims['email_verified'] ?? false, FILTER_VALIDATE_BOOLEAN)) {
-            throw new ApiException('GOOGLE_EMAIL_NOT_VERIFIED', 'Your Google email address is not verified.', 403);
+        if (
+            !filter_var(
+                $claims['email_verified'] ?? false,
+                FILTER_VALIDATE_BOOLEAN
+            )
+        ) {
+            throw new ApiException(
+                'GOOGLE_EMAIL_NOT_VERIFIED',
+                'Your Google email address is not verified.',
+                403
+            );
         }
 
-        return ['sub' => $sub, 'email' => $email, 'name' => trim((string) ($claims['name'] ?? '')) ?: Str::before($email, '@')];
+        return [
+            'sub'   => $sub,
+            'email' => $email,
+            'name'  => trim((string) ($claims['name'] ?? ''))
+            ?: Str::before($email, '@'),
+        ];
     }
 
-    /** A new Google user gets an account and a default business. The timezone can be changed later. */
-    private function createAccount(array $claims): User
-    {
+    /**
+     * Creates a verified Google account and permanently
+     * reserves one registration slot for its Android device.
+     *
+     * All database changes happen in one transaction.
+     */
+    private function createAccount(
+        array $claims,
+        string $androidId
+    ): User {
         if (DisposableEmailService::isDisposable($claims['email'])) {
             throw new ApiException(
                 'DISPOSABLE_EMAIL_NOT_ALLOWED',
                 'Temporary email addresses are not allowed. Please use your regular email address.',
-                422,
+                422
             );
         }
 
-        try {
-            return DB::transaction(function () use ($claims) {
-                $user = User::create(['name' => Str::limit($claims['name'], 120, ''), 'email' => $claims['email'], 'password' => null]);
-                $user->forceFill(['email_verified_at' => now()])->save(); // Google already verified this email
+        // Validate device ID and server configuration before
+        // attempting account creation.
+        $this->devices->deviceHash($androidId);
 
-                $business = Business::create([
-                    'name'     => Str::limit($claims['name'] . "'s business", 120, ''),
-                    'timezone' => config('remit.default_business_timezone'),
+        try {
+            return DB::transaction(function () use ($claims, $androidId) {
+                $user = User::create([
+                    'name'     => Str::limit($claims['name'], 120, ''),
+                    'email'    => $claims['email'],
+                    'password' => null,
                 ]);
 
-                BusinessMembership::create(['business_id' => $business->id, 'user_id' => $user->id, 'role' => BusinessRole::Owner]);
+                // Google has already verified this email.
+                $user->forceFill([
+                    'email_verified_at' => now(),
+                ])->save();
+
+                $business = Business::create([
+                    'name'     => Str::limit(
+                        $claims['name'] . "'s business",
+                        120,
+                        ''
+                    ),
+                    'timezone' => config(
+                        'remit.default_business_timezone'
+                    ),
+                ]);
+
+                BusinessMembership::create([
+                    'business_id' => $business->id,
+                    'user_id'     => $user->id,
+                    'role'        => BusinessRole::Owner,
+                ]);
 
                 $user->socialAccounts()->create([
                     'provider'         => SocialAccount::PROVIDER_GOOGLE,
@@ -156,10 +275,28 @@ class GoogleAuthService
                     'email'            => $claims['email'],
                 ]);
 
+                // Confirm one permanent device-registration slot.
+                // If the device limit is reached, the transaction
+                // rolls back the user, business and social account.
+                $this->devices->reserve(
+                    $user,
+                    $androidId,
+                    true
+                );
+
                 return $user;
-            });
-        } catch (UniqueConstraintViolationException) {
-            throw new ApiException('ACCOUNT_LINK_REQUIRED', 'An account with this email already exists. Log in with your password, then link Google from your account settings.', 409, ['email' => $claims['email']]);
+            }, 3);
+        } catch (UniqueConstraintViolationException $exception) {
+            if (!User::query()->where('email', $claims['email'])->exists()) {
+                throw $exception;
+            }
+
+            throw new ApiException(
+                'ACCOUNT_LINK_REQUIRED',
+                'An account with this email already exists. Log in with your password, then link Google from your account settings.',
+                409,
+                ['email' => $claims['email']]
+            );
         }
     }
 }

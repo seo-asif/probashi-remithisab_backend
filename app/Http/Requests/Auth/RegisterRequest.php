@@ -54,6 +54,7 @@ class RegisterRequest extends AuthRequest
             'business_phone' => ['nullable', 'string', 'regex:/^\+?\d{1,18}$/'],
             'country_code'   => ['required', 'alpha', 'size:2'],
             'timezone'       => ['required', 'timezone'],
+            'android_id' => ['required', 'string', 'regex:/\A[a-fA-F0-9]{16}\z/'],
         ];
     }
 

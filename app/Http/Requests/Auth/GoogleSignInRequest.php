@@ -16,6 +16,11 @@ class GoogleSignInRequest extends FormRequest
         return [
             'id_token'    => ['required', 'string', 'max:8192'],
             'device_name' => ['nullable', 'string', 'max:60'],
+            'android_id'  => [
+                'nullable',
+                'string',
+                'regex:/\A[a-fA-F0-9]{16}\z/',
+            ],
         ];
     }
 }

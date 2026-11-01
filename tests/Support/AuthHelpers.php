@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Mail;
 
 trait AuthHelpers
 {
+
     protected function registerPayload(array $override = []): array
     {
         return $override + [
@@ -23,6 +24,7 @@ trait AuthHelpers
             'business_phone'        => '01712345678',
             'country_code'          => 'FJ',
             'timezone'              => 'Pacific/Fiji',
+            'android_id'            => 'a1b2c3d4e5f60718',
         ];
     }
 

@@ -122,7 +122,13 @@ class RegistrationTest extends TestCase
         Mail::fake();
 
         for ($i = 1; $i <= 10; $i++) {
-            $this->postJson('/api/v1/auth/register', $this->registerPayload(['email' => "user{$i}@example.com"]))->assertStatus(201);
+            $this->postJson(
+                '/api/v1/auth/register',
+                $this->registerPayload([
+                    'email' => "user{$i}@example.com",
+                    'android_id' => sprintf('%016x', $i),
+                ])
+            )->assertStatus(201);
         }
 
         $this->postJson('/api/v1/auth/register', $this->registerPayload(['email' => 'user11@example.com']))
@@ -172,6 +178,86 @@ class RegistrationTest extends TestCase
         ]);
 
         Mail::assertSent(OtpMail::class, 1);
+    }
+
+    public function test_five_registrations_from_same_device_are_allowed_but_sixth_is_rejected(): void
+    {
+        Mail::fake();
+
+        $deviceId = 'a1b2c3d4e5f60718';
+
+        for ($i = 1; $i <= 5; $i++) {
+            $this->postJson(
+                '/api/v1/auth/register',
+                $this->registerPayload([
+                    'email' => "deviceuser{$i}@example.com",
+                    'android_id' => $deviceId,
+                ])
+            )->assertStatus(201);
+        }
+
+        $this->assertDatabaseCount('users', 5);
+        $this->assertDatabaseCount('businesses', 5);
+        $this->assertDatabaseCount('business_memberships', 5);
+        $this->assertDatabaseCount('device_registrations', 5);
+
+        $this->postJson(
+            '/api/v1/auth/register',
+            $this->registerPayload([
+                'email'      => 'deviceuser6@example.com',
+                'android_id' => $deviceId,
+            ])
+        )
+            ->assertStatus(422)
+            ->assertJsonPath('code', 'DEVICE_REGISTRATION_LIMIT');
+
+        // Rejected registration must not create partial records.
+        $this->assertDatabaseCount('users', 5);
+        $this->assertDatabaseCount('businesses', 5);
+        $this->assertDatabaseCount('business_memberships', 5);
+        $this->assertDatabaseCount('device_registrations', 5);
+        $this->assertDatabaseCount('registration_devices', 1);
+
+        $this->assertDatabaseMissing('users', [
+            'email' => 'deviceuser6@example.com',
+        ]);
+    }
+
+    public function test_different_android_devices_have_independent_registration_limits(): void
+    {
+        Mail::fake();
+
+        for ($i = 1; $i <= 6; $i++) {
+            $deviceId = $i <= 5
+            ? 'a1b2c3d4e5f60718'
+            : 'b1c2d3e4f5061728';
+
+            $this->postJson(
+                '/api/v1/auth/register',
+                $this->registerPayload([
+                    'email' => "separate{$i}@example.com",
+                    'android_id' => $deviceId,
+                ])
+            )->assertStatus(201);
+        }
+
+        $this->assertDatabaseCount('users', 6);
+        $this->assertDatabaseCount('device_registrations', 6);
+        $this->assertDatabaseCount('registration_devices', 2);
+    }
+
+    public function test_existing_verified_account_can_log_in_without_android_id(): void
+    {
+        $user = $this->makeUser();
+
+        $this->postJson('/api/v1/auth/login', [
+            'email'    => $user->email,
+            'password' => 'Secret123',
+        ])
+            ->assertOk()
+            ->assertJsonPath('code', 'OK');
+
+        $this->assertDatabaseCount('device_registrations', 0);
     }
 
 }

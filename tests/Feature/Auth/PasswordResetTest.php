@@ -7,6 +7,7 @@ use App\Mail\PasswordChangedMail;
 use App\Models\PasswordResetTicket;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Tests\Support\AuthHelpers;
 use Tests\TestCase;
@@ -54,7 +55,7 @@ class PasswordResetTest extends TestCase
         $this->reset($this->ticket())->assertOk()->assertJsonPath('code', 'OK');
 
         $this->assertDatabaseCount('personal_access_tokens', 0);
-        Mail::assertQueued(PasswordChangedMail::class, fn ($mail) => $mail->hasTo(self::EMAIL));
+        Mail::assertQueued(PasswordChangedMail::class, fn($mail) => $mail->hasTo(self::EMAIL));
         $this->assertDatabaseHas('audit_logs', ['action' => 'auth.password_reset']);
 
         $this->postJson('/api/v1/auth/login', ['email' => self::EMAIL, 'password' => 'NewSecret456'])->assertOk();
@@ -67,12 +68,12 @@ class PasswordResetTest extends TestCase
         Mail::fake();
         $this->makeUser();
 
-        $known   = $this->forgot();
+        $known = $this->forgot();
         $unknown = $this->forgot('nobody@example.com');
 
         $known->assertOk();
         $this->assertSame($known->json(), $unknown->json());
-        $this->assertCount(1, $this->otpMails());   // only the real account got an email
+        $this->assertCount(1, $this->otpMails()); // only the real account got an email
     }
 
     public function test_no_code_is_sent_to_a_suspended_account_but_the_answer_looks_the_same(): void
@@ -91,7 +92,7 @@ class PasswordResetTest extends TestCase
         Mail::fake();
         $this->makeUser();
         $this->forgot()->assertOk();
-        $code  = $this->lastOtp();
+        $code = $this->lastOtp();
         $wrong = $code === '000000' ? '111111' : '000000';
 
         $this->verifyCode($wrong)->assertStatus(422)->assertJsonPath('code', 'OTP_INVALID');
@@ -104,7 +105,7 @@ class PasswordResetTest extends TestCase
         $this->makeUser();
         $this->forgot()->assertOk();
 
-        $known   = $this->verifyCode('000000');
+        $known = $this->verifyCode('000000');
         $unknown = $this->verifyCode('000000', 'nobody@example.com');
 
         $this->assertSame($known->json(), $unknown->json());
@@ -121,7 +122,7 @@ class PasswordResetTest extends TestCase
         $this->verifyCode($code)->assertStatus(422);
 
         $this->travel(6)->minutes();
-        $this->forgot()->assertOk();   // limiter window has passed
+        $this->forgot()->assertOk(); // limiter window has passed
         $old = $this->lastOtp();
         $this->travel(6)->minutes();
         $this->verifyCode($old)->assertStatus(422);
@@ -155,7 +156,7 @@ class PasswordResetTest extends TestCase
         $this->makeUser();
         $this->ticket();
 
-        $wrong   = $this->reset('not-the-ticket');
+        $wrong = $this->reset('not-the-ticket');
         $unknown = $this->reset('not-the-ticket', ['email' => 'nobody@example.com']);
 
         $wrong->assertStatus(422)->assertJsonPath('code', 'RESET_TOKEN_INVALID');
@@ -189,11 +190,24 @@ class PasswordResetTest extends TestCase
     public function test_resetting_also_verifies_an_unverified_email(): void
     {
         Mail::fake();
-        $this->makeUnverifiedUser();
+
+        // Simulate an account created before device registration enforcement.
+        config()->set(
+            'registration_devices.enforcement_started_at',
+            '2026-11-01 00:00:00'
+        );
+
+        $user = $this->makeUnverifiedUser();
+
+        $user->forceFill([
+            'created_at' => '2026-10-01 00:00:00',
+        ])->save();
 
         $this->reset($this->ticket())->assertOk();
 
-        $this->assertNotNull(User::where('email', self::EMAIL)->first()->email_verified_at);
+        $this->assertNotNull(
+            User::where('email', self::EMAIL)->first()->email_verified_at
+        );
     }
 
     public function test_a_google_only_account_can_create_a_password_this_way(): void
@@ -205,4 +219,85 @@ class PasswordResetTest extends TestCase
 
         $this->postJson('/api/v1/auth/login', ['email' => self::EMAIL, 'password' => 'NewSecret456'])->assertOk();
     }
+
+public function test_password_reset_rejects_new_account_without_device_record(): void
+{
+    config()->set(
+        'registration_devices.enforcement_started_at',
+        '2026-10-01 00:00:00'
+    );
+
+    Mail::fake();
+
+    $user = $this->makeUnverifiedUser();
+
+    $ticket = $this->ticket();
+
+    $this->reset($ticket)
+        ->assertStatus(422)
+        ->assertJsonPath('code', 'DEVICE_REGISTRATION_REQUIRED');
+
+    $this->assertNull($user->fresh()->email_verified_at);
+
+    $this->assertDatabaseHas('password_reset_tickets', [
+        'user_id' => $user->id,
+        'used_at' => null,
+    ]);
+}
+
+public function test_password_reset_rejects_expired_device_reservation(): void
+{
+    Mail::fake();
+
+    $user = $this->makeUnverifiedUser();
+
+    DB::transaction(function () use ($user) {
+        app(\App\Services\Auth\DeviceRegistrationService::class)
+            ->reserve($user, 'a1b2c3d4e5f60718');
+    });
+
+    DB::table('device_registrations')
+        ->where('user_id', $user->id)
+        ->update([
+            'reserved_until' => now()->subMinute(),
+        ]);
+
+    $ticket = $this->ticket();
+
+    $this->reset($ticket)
+        ->assertStatus(422)
+        ->assertJsonPath('code', 'DEVICE_RESERVATION_EXPIRED');
+
+    $this->assertNull($user->fresh()->email_verified_at);
+
+    $this->assertDatabaseHas('password_reset_tickets', [
+        'user_id' => $user->id,
+        'used_at' => null,
+    ]);
+}
+
+public function test_password_reset_confirms_valid_device_reservation(): void
+{
+    Mail::fake();
+
+    $user = $this->makeUnverifiedUser();
+
+    DB::transaction(function () use ($user) {
+        app(\App\Services\Auth\DeviceRegistrationService::class)
+            ->reserve($user, 'a1b2c3d4e5f60718');
+    });
+
+    $this->reset($this->ticket())->assertOk();
+
+    $this->assertNotNull($user->fresh()->email_verified_at);
+
+    $registration = DB::table('device_registrations')
+        ->where('user_id', $user->id)
+        ->first();
+
+    $this->assertNotNull($registration);
+    $this->assertNotNull($registration->confirmed_at);
+    $this->assertNull($registration->reserved_until);
+}
+
 }
