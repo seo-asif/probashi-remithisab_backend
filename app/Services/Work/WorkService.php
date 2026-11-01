@@ -131,7 +131,7 @@ final class WorkService
     // ------------------------------------------------------------------ days and bonuses
 
     /** One entry per day: saving a date again replaces it. */
-    public function saveDay(string $date, array $input): WorkDay
+    public function saveDay(string $date, array $input, bool $createOnly = false): WorkDay
     {
         $errors = [];
         if ($e = RecordTime::date($date, $this->tz())) {
@@ -164,8 +164,24 @@ final class WorkService
             Reject::fail($errors);
         }
 
-        return DB::transaction(function () use ($date, $kind, $hours, $amount, $input) {
+        return DB::transaction(function () use ($date, $kind, $hours, $amount, $input, $createOnly) {
+            if ($createOnly) {
+                \App\Models\Business::query()
+                    ->whereKey($this->current->id())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+            }
+
             $day = WorkDay::query()->where('work_date', $date)->first();
+
+            if ($createOnly && $day !== null) {
+                Reject::fail([
+                    'work_date' => [
+                        'work_date_taken',
+                        'Work is already recorded for this date. Open the existing record to edit it.',
+                    ],
+                ]);
+            }
             $old = $day ? MoneyAudit::values($day) : [];
             $day ??= new WorkDay(['uuid' => RecordId::make($input['id'] ?? null), 'work_date' => $date]);
             $day->fill(['kind' => $kind, 'hours' => $hours, 'amount' => $amount, 'currency' => $day->currency ?? $this->currencyOn($date), 'note' => $input['note'] ?? null])->save();

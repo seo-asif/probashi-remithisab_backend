@@ -220,6 +220,7 @@ Route::prefix('v1')->group(function () {
             Route::get('/rates', 'rates');
             Route::put('/settings', 'saveSettings');
             Route::get('/days', 'days');
+            Route::post('/days', 'storeDay');
             Route::put('/days/{date}', 'saveDay');
             Route::delete('/days/{date}', 'deleteDay');
             Route::get('/bonuses', 'bonuses');

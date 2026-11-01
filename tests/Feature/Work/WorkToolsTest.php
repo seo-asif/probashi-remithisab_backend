@@ -40,6 +40,41 @@ class WorkToolsTest extends TestCase
         $this->putJson('/api/v1/work/days/' . now()->addDays(3)->format('Y-m-d'), ['kind' => 'work', 'hours' => '8'])->assertStatus(422)->assertJsonPath('error_codes.work_date.0', 'date_in_future');
     }
 
+    public function test_create_only_work_day_rejects_duplicate_and_preserves_record(): void
+    {
+        $url = '/api/v1/work/days';
+
+        $this->postJson($url, [
+            'work_date' => '2026-10-01',
+            'kind' => 'work',
+            'hours' => '8',
+        ])->assertCreated()->assertJsonPath('data.day_pay', '48.00');
+
+        $this->postJson($url, [
+            'work_date' => '2026-10-01',
+            'kind' => 'work',
+            'hours' => '10',
+        ])->assertStatus(422)
+            ->assertJsonPath('error_codes.work_date.0', 'work_date_taken');
+
+        $this->getJson(
+            '/api/v1/work/days?from=2026-10-01&to=2026-10-01'
+        )->assertJsonCount(1, 'data.items')
+            ->assertJsonPath('data.items.0.hours', '8.00');
+
+        // Legacy PUT remains compatible with intentional edits.
+        $this->putJson('/api/v1/work/days/2026-10-01', [
+            'kind' => 'work',
+            'hours' => '10',
+        ])->assertOk()->assertJsonPath('data.day_pay', '66.00');
+
+        $this->postJson($url, [
+            'kind' => 'work',
+            'hours' => '8',
+        ])->assertStatus(422)
+            ->assertJsonPath('error_codes.work_date.0', 'date_invalid');
+    }
+
     public function test_w2_salary_with_loan_cut_and_suggested_dates(): void
     {
         foreach (['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05'] as $d) {

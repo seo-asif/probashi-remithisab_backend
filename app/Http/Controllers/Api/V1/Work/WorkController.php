@@ -70,6 +70,23 @@ class WorkController extends Controller
         return ApiResponse::success(['items' => $days]);
     }
 
+    public function storeDay(Request $request): JsonResponse
+    {
+        $date = $request->input('work_date');
+
+        $day = $this->service->saveDay(
+            is_string($date) ? $date : '',
+            $request->only(['id', 'kind', 'hours', 'amount', 'note']),
+            createOnly: true,
+        );
+
+        return ApiResponse::success(
+            $this->presentDay($day, $this->service->settings()),
+            'Saved.',
+            201,
+        );
+    }
+
     public function saveDay(Request $request, string $date): JsonResponse
     {
         $day = $this->service->saveDay($date, $request->only(['id', 'kind', 'hours', 'amount', 'note']));
