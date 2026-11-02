@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Administrator sign in</title><style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#182e31;background:#f1f6f5}
+*{box-sizing:border-box}body{min-height:100vh;margin:0;display:grid;place-items:center;padding:20px}
+main{background:white;width:min(100%,410px);padding:32px;border:1px solid #dce7e4;border-radius:16px;box-shadow:0 12px 36px #173f3520}
+h1{font-size:24px;margin:0 0 8px}p{color:#526864;font-size:14px;line-height:1.5}
+label{display:block;font-size:14px;font-weight:600;margin:20px 0 7px}
+input{width:100%;padding:12px;border:1px solid #afc4be;border-radius:8px;font:inherit}
+input:focus{outline:2px solid #168776;outline-offset:2px}button{margin-top:24px;width:100%;padding:13px;background:#08786a;border:0;border-radius:8px;color:white;font:inherit;font-weight:600;cursor:pointer}
+.error{color:#9c2424}
+</style></head><body><main><h1>Administrator sign in</h1><p>Authorized platform administrators only.</p>
+@if ($errors->any())<p class="error" role="alert">{{ $errors->first() }}</p>@endif
+<form method="post" action="{{ route('admin.login.submit') }}">@csrf
+<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="username" required value="{{ old('email') }}">
+<label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
+<button type="submit">Continue securely</button></form></main></body></html>
