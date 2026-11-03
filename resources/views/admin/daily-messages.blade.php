@@ -2,6 +2,7 @@
 @section('title', 'Daily Messages · Probashi Admin')
 @push('head')
 <link rel="stylesheet" href="{{ asset('css/admin/pages/daily-messages.css') }}">
+<link rel="stylesheet" href="{{ asset('css/admin/pages/daily-message-tools.css') }}">
 @endpush
 @section('content')
 <div class="dm-page">
@@ -9,6 +10,16 @@
         <div><div class="dm-eyebrow">Content management</div><h1>Daily Messages</h1><p>Manage the messages shown in the app. Changes to published messages affect the next message sync.</p></div>
         <a class="dm-button" href="{{ route('admin.daily-messages.create') }}">+ Add message</a>
     </div>
+    <div class="dm-utility-bar">
+        <a href="{{ route('admin.daily-messages.tools') }}">CSV import / export</a>
+        <a href="{{ route('admin.daily-messages.analytics') }}">Likes analytics</a>
+    </div>
+    <form id="dm-bulk-form" method="POST" action="{{ route('admin.daily-messages.bulk-status') }}" class="dm-bulk-bar">
+        @csrf
+        <span>Select messages on this page:</span>
+        <select name="status" aria-label="Bulk publication action" required><option value="published">Publish selected</option><option value="draft">Unpublish selected</option></select>
+        <button type="submit">Apply to selected</button>
+    </form>
     @if(session('notice')) <div class="dm-notice" role="status">{{ session('notice') }}</div> @endif
     <div class="dm-stats">
         <div><span>Total messages</span><strong>{{ number_format($counts['total']) }}</strong></div>
@@ -26,7 +37,7 @@
         </form>
         <div class="dm-table-wrap"><table><thead><tr><th>Message</th><th>Category</th><th>Status</th><th>Order</th><th>Actions</th></tr></thead><tbody>
         @forelse($messages as $message)
-            <tr><td><div class="dm-code">{{ $message->code }}</div><div class="dm-message" lang="bn">{{ $message->message_bn }}</div>@if($message->message_en)<div class="dm-translation">{{ $message->message_en }}</div>@endif</td>
+            <tr><td><label class="dm-select-message"><input type="checkbox" name="ids[]" value="{{ $message->id }}" form="dm-bulk-form" aria-label="Select {{ $message->code }}"> <span>Select</span></label><div class="dm-code">{{ $message->code }}</div><div class="dm-message" lang="bn">{{ $message->message_bn }}</div>@if($message->message_en)<div class="dm-translation">{{ $message->message_en }}</div>@endif</td>
             <td>{{ $categories[$message->category]['en'] ?? 'Uncategorized' }}</td><td><span class="dm-pill {{ $message->status === 'published' ? 'dm-live' : '' }}">{{ ucfirst($message->status) }}</span></td>
             <td>{{ $message->sort_order }}</td><td><div class="dm-actions"><a href="{{ route('admin.daily-messages.edit', $message->id) }}">Edit</a>
             <form method="POST" action="{{ route('admin.daily-messages.status', $message->id) }}">@csrf<input type="hidden" name="status" value="{{ $message->status === 'published' ? 'draft' : 'published' }}"><button type="submit">{{ $message->status === 'published' ? 'Unpublish' : 'Publish' }}</button></form></div></td></tr>

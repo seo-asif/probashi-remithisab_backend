@@ -107,3 +107,15 @@ Route::post('/admin/mfa/recovery', \App\Http\Controllers\Admin\AdminMfaRecoveryC
     'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
 ])->post('/admin/settings/recovery-codes', [\App\Http\Controllers\Admin\AdminRecoveryCodesController::class, 'regenerate'])
     ->middleware('throttle:5,10')->name('admin.settings.recovery.regenerate');
+
+// Phase 4.4 Pass 2: browser CSV tools, bulk publication, and likes analytics.
+\Illuminate\Support\Facades\Route::middleware([
+    'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
+])->group(function () {
+    \Illuminate\Support\Facades\Route::get('/admin/daily-messages/tools', [\App\Http\Controllers\Admin\DailyMessagesToolsController::class, 'index'])->name('admin.daily-messages.tools');
+    \Illuminate\Support\Facades\Route::post('/admin/daily-messages/import/preview', [\App\Http\Controllers\Admin\DailyMessagesToolsController::class, 'preview'])->middleware('throttle:10,1')->name('admin.daily-messages.import.preview');
+    \Illuminate\Support\Facades\Route::post('/admin/daily-messages/import', [\App\Http\Controllers\Admin\DailyMessagesToolsController::class, 'import'])->middleware('throttle:10,1')->name('admin.daily-messages.import.commit');
+    \Illuminate\Support\Facades\Route::get('/admin/daily-messages/export', [\App\Http\Controllers\Admin\DailyMessagesToolsController::class, 'export'])->middleware('throttle:15,1')->name('admin.daily-messages.export');
+    \Illuminate\Support\Facades\Route::post('/admin/daily-messages/bulk-status', [\App\Http\Controllers\Admin\DailyMessagesToolsController::class, 'bulkStatus'])->middleware('throttle:20,1')->name('admin.daily-messages.bulk-status');
+    \Illuminate\Support\Facades\Route::get('/admin/daily-messages/analytics', [\App\Http\Controllers\Admin\DailyMessagesAnalyticsController::class, 'index'])->name('admin.daily-messages.analytics');
+});
