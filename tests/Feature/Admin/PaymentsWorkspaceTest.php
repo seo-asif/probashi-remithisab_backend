@@ -84,4 +84,11 @@ final class PaymentsWorkspaceTest extends TestCase
         $this->get('/admin/payments')
             ->assertRedirect(route('admin.login'));
     }
+    public function test_payments_page_shows_review_action_and_current_description(): void
+    {
+        $this->authorized()->get('/admin/payments')->assertOk()
+            ->assertSee('open pending items to approve or reject them')
+            ->assertDontSee('Approval and rejection controls are not enabled');
+    }
+
 }

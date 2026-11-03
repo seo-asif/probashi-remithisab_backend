@@ -58,11 +58,11 @@ $icon = static fn (string $key) => '<svg viewBox="0 0 24 24" fill="none" stroke=
             </section>
             <div class="columns">
                 <section class="panel" aria-labelledby="payments-title">
-                    <div class="panel-heading"><div><h2 id="payments-title">Payment queue</h2><p>Latest payment requests, from the existing backend</p></div><span class="mini-label">Recent 6</span></div>
-                    <div class="table-wrap"><table><thead><tr><th>Request</th><th>Status</th><th>Submitted</th></tr></thead>
+                    <div class="panel-heading"><div><h2 id="payments-title">Payment queue</h2><p>Latest requests · select a request to review</p></div><span class="mini-label">Recent 6</span></div>
+                    <div class="table-wrap"><table><thead><tr><th>Request</th><th>Status</th><th>Submitted (Fiji time)</th></tr></thead>
                         <tbody>
                         @forelse ($recentPayments as $payment)
-                            <tr><td><strong>#{{ $payment->id }}</strong></td><td><span class="status {{ in_array($payment->status, ['pending','approved','rejected'], true) ? $payment->status : '' }}">{{ str_replace('_', ' ', $payment->status) }}</span></td><td>{{ \Illuminate\Support\Carbon::parse($payment->created_at)->format('d M Y \u{00B7} H:i') }}</td></tr>
+                            <tr><td><a href="{{ route('admin.payments.show', $payment->id) }}" style="color:#176453;text-decoration:underline;text-underline-offset:3px;font-weight:750">#{{ $payment->id }}</a></td><td><span class="status {{ in_array($payment->status, ['pending','approved','rejected'], true) ? $payment->status : '' }}">{{ str_replace('_', ' ', $payment->status) }}</span></td><td>{{ \Illuminate\Support\Carbon::parse($payment->created_at)->timezone('Pacific/Fiji')->format('d M Y, H:i') }}</td></tr>
                         @empty
                             <tr><td colspan="3"><div class="empty">No payment requests have been recorded yet.</div></td></tr>
                         @endforelse
@@ -72,8 +72,8 @@ $icon = static fn (string $key) => '<svg viewBox="0 0 24 24" fill="none" stroke=
                 <section class="panel" aria-labelledby="attention-title">
                     <div class="panel-heading"><div><h2 id="attention-title">Needs your attention</h2><p>Pending review workload</p></div></div>
                     <div class="side-body"><div class="inline-metric"><div><h3>Pending payments</h3><p>Requests awaiting review</p></div><strong>{{ number_format($metrics['pendingPayments']) }}</strong></div>
-                        <div class="divider"></div><h3>Review workflow</h3><p>Detailed payment review, approvals, and rejection actions will be available in the Payments workspace. Existing approval rules remain authoritative.</p>
-                        <div class="notice">Security is active. This overview is read-only; no payment or account changes can be made here.</div>
+                        <div class="divider"></div><h3>Review workflow</h3><p>Review pending requests and approve or reject them in the Payments workspace. Existing approval rules remain authoritative.</p>
+                        <div class="notice">This overview is read-only. <a href="{{ route('admin.payments', ['status' => 'pending']) }}" style="color:#176453;text-decoration:underline">Review pending payments</a> in the secure Payments workspace.</div>
                     </div>
                 </section>
             </div>

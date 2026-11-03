@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use Illuminate\Contracts\View\View;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -30,10 +31,10 @@ final class ActivityLogsController extends Controller
             $query->where('action', $action);
         }
         if ($from !== '') {
-            $query->whereDate('created_at', '>=', $from);
+            $query->where('created_at', '>=', CarbonImmutable::createFromFormat('!Y-m-d', $from, 'Pacific/Fiji')->startOfDay()->utc());
         }
         if ($to !== '') {
-            $query->whereDate('created_at', '<=', $to);
+            $query->where('created_at', '<', CarbonImmutable::createFromFormat('!Y-m-d', $to, 'Pacific/Fiji')->addDay()->startOfDay()->utc());
         }
         if ($search !== '') {
             $query->where(function ($query) use ($search) {

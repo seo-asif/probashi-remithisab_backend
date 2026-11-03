@@ -121,4 +121,45 @@ final class ActivityLogsTest extends TestCase
         $this->get('/admin/activity-logs')->assertOk()->assertSee('1-20 of 22');
         $this->get('/admin/activity-logs?page=2')->assertOk()->assertSee('21-22 of 22');
     }
+    public function test_action_has_readable_label_and_preserves_raw_audit_code(): void
+    {
+        $this->admin();
+        $this->record('plan_payment.submitted');
+        $this->get('/admin/activity-logs')->assertOk()
+            ->assertSee('Payment request submitted')
+            ->assertSee('plan_payment.submitted')
+            ->assertSee('Fiji time');
+    }
+
+    public function test_action_shows_plain_language_description_and_filter_label(): void
+    {
+        $this->admin();
+        $actor = User::factory()->create(['name' => 'Example Manager']);
+        $this->record('plan_payment.submitted', $actor, ['target_id' => 321]);
+
+        $this->get('/admin/activity-logs')->assertOk()
+            ->assertSee('Payment request submitted')
+            ->assertSee('Example Manager submitted payment request #321.')
+            ->assertSee('plan_payment.submitted');
+    }
+
+    public function test_unknown_action_has_fallback_without_invented_description(): void
+    {
+        $this->admin();
+        $this->record('custom.unknown_action');
+        $this->get('/admin/activity-logs')->assertOk()
+            ->assertSee('Custom · unknown action')
+            ->assertSee('custom.unknown_action');
+    }
+
+    public function test_fiji_local_date_filter_includes_utc_previous_day(): void
+    {
+        $this->admin();
+        $this->record('test.fiji_included', null, ['created_at' => '2026-11-02 13:00:00']);
+        $this->record('test.fiji_excluded', null, ['created_at' => '2026-11-02 11:00:00']);
+        $response = $this->get('/admin/activity-logs?from=2026-11-03&to=2026-11-03');
+        $response->assertOk()->assertSee('test.fiji_included</span>', false)
+            ->assertDontSee('test.fiji_excluded</span>', false);
+    }
+
 }
