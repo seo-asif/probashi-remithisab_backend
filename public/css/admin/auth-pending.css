@@ -1,0 +1,6 @@
+body.admin-mfa-pending {
+    font-family: system-ui;
+    max-width: 540px;
+    margin: 10vh auto;
+    padding: 20px;
+}

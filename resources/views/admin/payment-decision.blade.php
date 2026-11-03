@@ -2,29 +2,9 @@
 
 @section('title', 'Payment review &middot; Probashi Admin')
 
-@section('page_styles')
-.review-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:24px;flex-wrap:wrap}
-.review-head h1{font-size:clamp(25px,3vw,34px);letter-spacing:-1px;margin:7px 0}
-.review-sub{font-size:13px;color:#788b84}
-.review-back{font-size:13px;color:#206c5e;font-weight:700}
-.review-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(280px,.8fr);gap:18px}
-.review-card{background:#fff;border:1px solid #dfeae4;border-radius:16px;padding:25px;min-width:0}
-.review-card h2{font-size:16px;margin:0 0 19px}
-.review-row{display:flex;justify-content:space-between;gap:18px;border-top:1px solid #edf1ef;padding:13px 0;font-size:13px}
-.review-row:first-of-type{border-top:0}
-.review-row span{color:#708780}
-.review-row strong{text-align:right;overflow-wrap:anywhere}
-.review-field{margin-bottom:18px}
-.review-field label{display:block;font-size:12px;color:#526e65;margin-bottom:8px}
-.review-field textarea{width:100%;min-height:92px;resize:vertical;padding:12px;border:1px solid #cfded6;border-radius:9px;font:inherit;font-size:13px}
-.review-action{width:100%;border:0;border-radius:9px;padding:13px 16px;font:inherit;font-size:13px;font-weight:700;cursor:pointer}
-.review-approve{background:#14564b;color:#fff}
-.review-reject{background:#fff;border:1px solid #d19f9f;color:#8a3e3e}
-.review-alert{padding:14px;border-radius:10px;background:#eaf6ef;color:#215f4c;margin-bottom:18px;font-size:13px}
-.review-error{background:#fff0ec;color:#9b4038}
-.review-note{font-size:12px;color:#73897f;line-height:1.6}
-@media(max-width:920px){.review-grid{grid-template-columns:1fr}}@media(max-width:500px){.review-card{padding:19px}.review-row{flex-direction:column;gap:4px}.review-row strong{text-align:left}}
-@endsection
+@push('head')
+<link rel="stylesheet" href="{{ asset('css/admin/pages/payment-decision.css') }}">
+@endpush
 
 @section('content')
 <div class="review-head">
@@ -56,7 +36,7 @@
                 <input type="hidden" name="confirm_payment_id" value="{{ $payment->id }}">
                 <button class="review-action review-approve" type="submit">Approve payment</button>
             </form>
-            <hr style="border:0;border-top:1px solid #e8efea;margin:23px 0">
+            <hr class="payment-decision-divider">
             <form method="POST" action="{{ route('admin.payments.decision.submit', ['payment' => $payment->id]) }}" onsubmit="return confirm('Reject this payment request?');">
                 @csrf
                 <input type="hidden" name="decision" value="reject">
