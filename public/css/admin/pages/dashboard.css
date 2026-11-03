@@ -37,3 +37,25 @@
     color: #176453;
     text-decoration: underline;
 }
+
+/* Phase 4.1 responsive polish: overview */
+@media (max-width: 600px) {
+  #overview-page .intro { margin-bottom: 20px; }
+  #overview-page .columns { gap: 12px; }
+  #overview-page .panel-heading { flex-wrap: wrap; }
+  #overview-page .table-wrap { overscroll-behavior-x: contain; }
+  #overview-page .table-wrap table { min-width: 440px; }
+  #overview-page .side-body { padding-inline: 18px; }
+  #overview-page .stat { min-width: 0; }
+}
+
+@media (max-width: 390px) {
+  #overview-page .stats { grid-template-columns: minmax(0, 1fr); }
+  #overview-page .stat { min-height: 110px; }
+  #overview-page .stat-number { font-size: 31px; }
+}
+
+#overview-page a:focus-visible {
+  outline: 3px solid #87c9bb;
+  outline-offset: 3px;
+}

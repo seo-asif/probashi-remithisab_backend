@@ -146,3 +146,57 @@
                 padding: 15px
             }
         }
+
+/* Phase 4.1 responsive polish: shared admin shell */
+@media (max-width: 850px) {
+  .admin-mobile summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 2px;
+    color: #19473f;
+  }
+
+  .admin-mobile-links {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .admin-mobile-links > a {
+    display: flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 10px 12px;
+    border-radius: 9px;
+    background: #f4f8f6;
+    color: #19473f;
+    font-size: 13px;
+    text-decoration: none;
+  }
+
+  .admin-mobile-links > a[aria-current="page"] {
+    background: #e1f0eb;
+    font-weight: 700;
+  }
+
+  .admin-mobile-links > form {
+    grid-column: 1 / -1;
+  }
+
+  .admin-mobile-links > form button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 400px) {
+  .admin-mobile-links { grid-template-columns: minmax(0, 1fr); }
+  .admin-content { padding-inline: 12px; }
+}
+
+.admin-mobile :is(summary, a, button):focus-visible,
+.admin-nav a:focus-visible,
+.admin-logout:focus-visible {
+  outline: 3px solid #87c9bb;
+  outline-offset: 3px;
+}
