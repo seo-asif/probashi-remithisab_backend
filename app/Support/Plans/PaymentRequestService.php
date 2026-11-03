@@ -234,7 +234,7 @@ final class PaymentRequestService
         $this->assertTrxUnused($trxHash);
 
         try {
-            return DB::transaction(function () use ($business, $submittedBy, $product, $months, $trxId, $trxHash, $payerNumber): PlanPaymentRequest {
+            $payment = DB::transaction(function () use ($business, $submittedBy, $product, $months, $trxId, $trxHash, $payerNumber): PlanPaymentRequest {
                 $lockedBusiness = Business::query()
                     ->whereKey($business->id)
                     ->lockForUpdate()
@@ -273,6 +273,21 @@ final class PaymentRequestService
             }
             throw $e;
         }
+
+        // Queue only after the payment has committed. Never fail the submission
+        // if queue storage or notification dispatch is unavailable.
+        try {
+            if (config('services.telegram_admin.bot_token') && config('services.telegram_admin.chat_id')) {
+                \App\Jobs\SendPaymentSubmittedTelegram::dispatch($payment->id)->afterCommit();
+            }
+        } catch (\Throwable $exception) {
+            \Illuminate\Support\Facades\Log::warning('Unable to queue Telegram payment alert', [
+                'payment_id' => $payment->id,
+                'exception_type' => $exception::class,
+            ]);
+        }
+
+        return $payment;
     }
 
     public function normalizeTrxId(string $value): string
