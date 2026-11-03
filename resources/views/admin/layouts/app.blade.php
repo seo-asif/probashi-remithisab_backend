@@ -26,6 +26,8 @@
                     @if (request()->routeIs('admin.subscriptions')) aria-current="page" @endif>Subscriptions</a>
                 <a href="{{ route('admin.businesses') }}"
                     @if (request()->routeIs('admin.businesses', 'admin.businesses.show')) aria-current="page" @endif>Businesses</a>
+                <a href="{{ route('admin.daily-messages') }}"
+                    @if (request()->routeIs('admin.daily-messages*')) aria-current="page" @endif>Daily Messages</a>
                 <a href="{{ route('admin.activity-logs') }}"
                     @if (request()->routeIs('admin.activity-logs')) aria-current="page" @endif>Activity Logs</a>
                             <a href="{{ route('admin.settings') }}"
@@ -48,6 +50,7 @@
                         <a href="{{ route('admin.subscriptions') }}"
                             @if (request()->routeIs('admin.subscriptions')) aria-current="page" @endif>Subscriptions</a>
                         <a href="{{ route('admin.businesses') }}">Businesses</a>
+                        <a href="{{ route('admin.daily-messages') }}" @if (request()->routeIs('admin.daily-messages*')) aria-current="page" @endif>Daily Messages</a>
                         <a href="{{ route('admin.activity-logs') }}">Activity Logs</a>
                         <a href="{{ route('admin.settings') }}">Account Settings</a>
                         <form method="POST" action="{{ route('admin.logout') }}">@csrf<button type="submit">Sign

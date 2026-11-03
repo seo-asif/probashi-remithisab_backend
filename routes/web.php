@@ -90,6 +90,18 @@ Route::post('/admin/mfa/recovery', \App\Http\Controllers\Admin\AdminMfaRecoveryC
         ->middleware('throttle:5,1')->name('admin.settings.password');
 });
 
+// Phase 4.4: protected browser interface for the existing Daily Messages table.
+\Illuminate\Support\Facades\Route::middleware([
+    'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
+])->group(function () {
+    \Illuminate\Support\Facades\Route::get('/admin/daily-messages', [\App\Http\Controllers\Admin\DailyMessagesController::class, 'index'])->name('admin.daily-messages');
+    \Illuminate\Support\Facades\Route::get('/admin/daily-messages/create', [\App\Http\Controllers\Admin\DailyMessagesController::class, 'create'])->name('admin.daily-messages.create');
+    \Illuminate\Support\Facades\Route::post('/admin/daily-messages', [\App\Http\Controllers\Admin\DailyMessagesController::class, 'store'])->middleware('throttle:30,1')->name('admin.daily-messages.store');
+    \Illuminate\Support\Facades\Route::get('/admin/daily-messages/{message}/edit', [\App\Http\Controllers\Admin\DailyMessagesController::class, 'edit'])->whereNumber('message')->name('admin.daily-messages.edit');
+    \Illuminate\Support\Facades\Route::post('/admin/daily-messages/{message}', [\App\Http\Controllers\Admin\DailyMessagesController::class, 'update'])->whereNumber('message')->middleware('throttle:30,1')->name('admin.daily-messages.update');
+    \Illuminate\Support\Facades\Route::post('/admin/daily-messages/{message}/status', [\App\Http\Controllers\Admin\DailyMessagesController::class, 'status'])->whereNumber('message')->middleware('throttle:30,1')->name('admin.daily-messages.status');
+});
+
 // Phase 4.2 Pass 2: MFA-verified regeneration of administrator recovery codes.
 \Illuminate\Support\Facades\Route::middleware([
     'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
