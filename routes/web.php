@@ -79,3 +79,19 @@ Route::post('/admin/mfa/recovery', \App\Http\Controllers\Admin\AdminMfaRecoveryC
     'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
 ])->get('/admin/activity-logs', \App\Http\Controllers\Admin\ActivityLogsController::class)
     ->name('admin.activity-logs');
+
+// Phase 4.2: verified administrator account settings and password change.
+\Illuminate\Support\Facades\Route::middleware([
+    'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
+])->group(function () {
+    \Illuminate\Support\Facades\Route::get('/admin/settings', [\App\Http\Controllers\Admin\AdminSettingsController::class, 'show'])
+        ->name('admin.settings');
+    \Illuminate\Support\Facades\Route::post('/admin/settings/password', [\App\Http\Controllers\Admin\AdminSettingsController::class, 'changePassword'])
+        ->middleware('throttle:5,1')->name('admin.settings.password');
+});
+
+// Phase 4.2 Pass 2: MFA-verified regeneration of administrator recovery codes.
+\Illuminate\Support\Facades\Route::middleware([
+    'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
+])->post('/admin/settings/recovery-codes', [\App\Http\Controllers\Admin\AdminRecoveryCodesController::class, 'regenerate'])
+    ->middleware('throttle:5,10')->name('admin.settings.recovery.regenerate');

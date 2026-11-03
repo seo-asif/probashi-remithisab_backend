@@ -28,6 +28,8 @@
                     @if (request()->routeIs('admin.businesses', 'admin.businesses.show')) aria-current="page" @endif>Businesses</a>
                 <a href="{{ route('admin.activity-logs') }}"
                     @if (request()->routeIs('admin.activity-logs')) aria-current="page" @endif>Activity Logs</a>
+                            <a href="{{ route('admin.settings') }}"
+                    @if (request()->routeIs('admin.settings')) aria-current="page" @endif>Account Settings</a>
             </nav>
             <div class="admin-side-footer">
                 <div>Administrator workspace</div>
@@ -47,6 +49,7 @@
                             @if (request()->routeIs('admin.subscriptions')) aria-current="page" @endif>Subscriptions</a>
                         <a href="{{ route('admin.businesses') }}">Businesses</a>
                         <a href="{{ route('admin.activity-logs') }}">Activity Logs</a>
+                        <a href="{{ route('admin.settings') }}">Account Settings</a>
                         <form method="POST" action="{{ route('admin.logout') }}">@csrf<button type="submit">Sign
                                 out</button></form>
                     </div>
