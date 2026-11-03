@@ -31,23 +31,24 @@ final class AdminMfaRecoveryController extends Controller
         if (! $user || ! $admin) {
             abort(403);
         }
-        $ok = DB::transaction(function () use ($user, $admin, $hash): bool {
+        $verifiedVersion = DB::transaction(function () use ($user, $admin, $hash, $request): ?int {
             $lockedUser = User::query()->whereKey($user->id)->lockForUpdate()->first();
             $lockedAdmin = PlatformAdmin::query()->whereKey($admin->id)->lockForUpdate()->first();
             if (! $lockedUser || ! $lockedUser->hasPassword() || $lockedUser->status !== AccountStatus::Active
                 || $lockedUser->email_verified_at === null || ! $lockedAdmin
                 || $lockedAdmin->status !== AccountStatus::Active
                 || (string) $lockedAdmin->user_id !== (string) $lockedUser->id
+                || (int) $request->session()->get('admin_pending.session_version', 0) !== (int) $lockedAdmin->session_version
                 || ! AdminMfaCredential::query()->where('platform_admin_id', $admin->id)->exists()) {
-                return false;
+                return null;
             }
             // Atomic deletion ensures that one code can authenticate at most once.
             return DB::table('platform_admin_mfa_recovery_codes')
                 ->where('platform_admin_id', $admin->id)
                 ->where('code_hash', $hash)
-                ->delete() === 1;
+                ->delete() === 1 ? (int) $lockedAdmin->session_version : null;
         });
-        if (! $ok) {
+        if ($verifiedVersion === null) {
             $audit->record('admin.mfa_recovery_failed', $user);
             throw ValidationException::withMessages(['recovery_code' => 'Invalid or previously used recovery code.']);
         }
@@ -56,6 +57,7 @@ final class AdminMfaRecoveryController extends Controller
         $request->session()->regenerate();
         $request->session()->put('admin_mfa.user_id', $user->getAuthIdentifier());
         $request->session()->put('admin_mfa.last_activity', time());
+        $request->session()->put('admin_mfa.session_version', $verifiedVersion);
         $audit->record('admin.mfa_recovery_used', $user);
         return redirect()->route('admin.dashboard');
     }

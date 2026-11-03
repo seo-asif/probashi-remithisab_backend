@@ -30,7 +30,8 @@ final class AdminMfaController extends Controller
         $user = User::query()->find($id);
         $admin = $user ? PlatformAdmin::query()->where('user_id', $user->id)->first() : null;
         if (! $user || $user->status !== AccountStatus::Active || $user->email_verified_at === null
-            || ! $admin || $admin->status !== AccountStatus::Active) {
+            || ! $admin || $admin->status !== AccountStatus::Active
+            || (int) $request->session()->get('admin_pending.session_version', 0) !== (int) $admin->session_version) {
             $request->session()->forget(['admin_pending.user_id', 'admin_pending.created_at', 'admin_pending.enrollment_secret']);
             abort(403, 'Administrator access unavailable.');
         }
@@ -71,7 +72,7 @@ final class AdminMfaController extends Controller
     {
         [$user, $admin] = $this->pending($request);
         $data = $request->validate(['code' => ['required', 'regex:/\A[0-9]{6}\z/D']]);
-        $success = DB::transaction(function () use ($admin, $data): bool {
+        $verifiedVersion = DB::transaction(function () use ($admin, $data, $request): ?int {
             // Serialise verification so that the same TOTP step cannot be accepted twice.
             // Lock and revalidate eligibility at verification time.
             $lockedUser = User::query()->whereKey($admin->user_id)->lockForUpdate()->first();
@@ -79,24 +80,25 @@ final class AdminMfaController extends Controller
             if (! $lockedUser || $lockedUser->status !== AccountStatus::Active
                 || $lockedUser->email_verified_at === null
                 || ! $locked || $locked->status !== AccountStatus::Active
-                || (string) $locked->user_id !== (string) $lockedUser->id) {
-                return false;
+                || (string) $locked->user_id !== (string) $lockedUser->id
+                || (int) $request->session()->get('admin_pending.session_version', 0) !== (int) $locked->session_version) {
+                return null;
             }
             $credential = AdminMfaCredential::query()
                 ->where('platform_admin_id', $admin->id)->lockForUpdate()->first();
             if (! $credential) {
-                return false; // First-time enrollment is CLI-only.
+                return null; // First-time enrollment is CLI-only.
             }
             $step = Totp::matchingStep($credential->secret, $data['code'], time(), $credential->last_used_step);
             if ($step === null) {
-                return false;
+                return null;
             }
             $credential->last_used_step = $step;
             $credential->save();
-            return true;
+            return (int) $locked->session_version;
         });
 
-        if (! $success) {
+        if ($verifiedVersion === null) {
             $audit->record('admin.mfa_failed', $user);
             throw ValidationException::withMessages(['code' => 'Invalid or previously used authenticator code.']);
         }
@@ -106,6 +108,7 @@ final class AdminMfaController extends Controller
         $request->session()->regenerate();
         $request->session()->put('admin_mfa.user_id', $user->getAuthIdentifier());
         $request->session()->put('admin_mfa.last_activity', time());
+        $request->session()->put('admin_mfa.session_version', $verifiedVersion);
         $audit->record('admin.mfa_verified', $user);
         return redirect()->route('admin.dashboard');
     }

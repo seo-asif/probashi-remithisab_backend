@@ -10,6 +10,7 @@ use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password;
@@ -51,10 +52,21 @@ final class AdminSettingsController extends Controller
         }
 
         // The User password cast hashes the new password before storage.
-        $user->forceFill([
-            'password' => $data['password'],
-            'remember_token' => Str::random(60),
-        ])->save();
+        DB::transaction(function () use ($user, $data): void {
+            $lockedUser = \App\Models\User::query()->whereKey($user->id)->lockForUpdate()->firstOrFail();
+            if (! $lockedUser->hasPassword() || ! Hash::check($data['current_password'], $lockedUser->password)
+                || Hash::check($data['password'], $lockedUser->password)) {
+                throw ValidationException::withMessages([
+                    'current_password' => 'The current password has changed. Please try again.',
+                ]);
+            }
+            $admin = PlatformAdmin::query()->where('user_id', $lockedUser->id)->lockForUpdate()->firstOrFail();
+            $lockedUser->forceFill([
+                'password' => $data['password'],
+                'remember_token' => Str::random(60),
+            ])->save();
+            $admin->increment('session_version');
+        }, 3);
 
         $audit->record('admin.password_changed', $user);
         Auth::guard('web')->logout();

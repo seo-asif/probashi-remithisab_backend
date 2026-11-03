@@ -63,6 +63,8 @@ final class LoginController extends Controller
         // This is a restricted pre-authentication session, never Auth::login().
         $request->session()->put('admin_pending.user_id', $user->getAuthIdentifier());
         $request->session()->put('admin_pending.created_at', time());
+        $request->session()->put('admin_pending.session_version', (int) PlatformAdmin::query()
+            ->where('user_id', $user->id)->value('session_version'));
         $audit->record('admin.password_verified', $user);
         return redirect()->route('admin.mfa.pending');
     }
