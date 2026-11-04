@@ -16,7 +16,7 @@ final class DailyMessageApiTest extends TestCase
         DailyMessage::create(['code' => 'Q002', 'message_bn' => 'Draft', 'status' => 'draft']);
 
         $response = $this->getJson('/api/v1/daily-messages/sync');
-        $response->assertOk()->assertJsonPath('data.sync_interval_days', 7)
+        $response->assertOk()->assertJsonPath('data.sync_interval_days', 1)
             ->assertJsonCount(1, 'data.messages')
             ->assertJsonPath('data.messages.0.code', 'Q001');
 

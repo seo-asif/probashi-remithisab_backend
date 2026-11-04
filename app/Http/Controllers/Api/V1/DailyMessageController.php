@@ -16,12 +16,12 @@ final class DailyMessageController extends Controller
             ->where('status', 'published')
             ->orderBy('sort_order')->orderBy('id')
             ->get(['uuid', 'code', 'message_bn', 'message_en', 'category'])
-            ->map(fn (DailyMessage $message) => [
-                'id' => $message->uuid,
-                'code' => $message->code,
+            ->map(fn(DailyMessage $message) => [
+                'id'       => $message->uuid,
+                'code'     => $message->code,
                 'category' => $message->category,
-                'bn' => $message->message_bn,
-                'en' => $message->message_en,
+                'bn'       => $message->message_bn,
+                'en'       => $message->message_en,
             ])->all();
     }
 
@@ -32,10 +32,10 @@ final class DailyMessageController extends Controller
         $unchanged = hash_equals($version, (string) $request->query('version', ''));
 
         return ApiResponse::success([
-            'version' => $version,
-            'sync_interval_days' => 7,
-            'unchanged' => $unchanged,
-            'messages' => $unchanged ? null : $messages,
+            'version'            => $version,
+            'sync_interval_days' => 1,
+            'unchanged'          => $unchanged,
+            'messages'           => $unchanged ? null : $messages,
         ]);
     }
 

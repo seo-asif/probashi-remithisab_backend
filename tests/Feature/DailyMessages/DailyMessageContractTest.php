@@ -28,7 +28,7 @@ final class DailyMessageContractTest extends TestCase
     public function test_empty_dataset_has_stable_sync_contract_and_today_returns_null(): void
     {
         $first = $this->getJson(self::SYNC)->assertOk()
-            ->assertJsonPath('data.sync_interval_days', 7)
+            ->assertJsonPath('data.sync_interval_days', 1)
             ->assertJsonPath('data.unchanged', false)
             ->assertJsonCount(0, 'data.messages');
         $version = $first->json('data.version');
