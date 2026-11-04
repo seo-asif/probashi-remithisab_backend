@@ -67,6 +67,7 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/password/reset', ResetPasswordController::class)->middleware('throttle:otp-verify');
 
     Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+        Route::post('/activity/daily', \App\Http\Controllers\Api\V1\Activity\DailyActiveController::class);
         Route::get('/daily-messages/likes', [DailyMessageLikeController::class, 'index']);
         Route::put('/daily-messages/{id}/like', [DailyMessageLikeController::class, 'like']);
         Route::delete('/daily-messages/{id}/like', [DailyMessageLikeController::class, 'unlike']);
