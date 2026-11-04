@@ -90,6 +90,12 @@ Route::post('/admin/mfa/recovery', \App\Http\Controllers\Admin\AdminMfaRecoveryC
         ->middleware('throttle:5,1')->name('admin.settings.password');
 });
 
+// Phase 4.6A: read-only existing-signal user activity (no new event collection).
+\Illuminate\Support\Facades\Route::middleware([
+    'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
+])->get('/admin/user-activity', \App\Http\Controllers\Admin\UserActivityController::class)
+    ->name('admin.user-activity');
+
 // Phase 4.4: protected browser interface for the existing Daily Messages table.
 \Illuminate\Support\Facades\Route::middleware([
     'auth', 'platform.admin', \App\Http\Middleware\RequireAdminMfa::class,
