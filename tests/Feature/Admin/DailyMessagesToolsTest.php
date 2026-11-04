@@ -152,7 +152,7 @@ final class DailyMessagesToolsTest extends TestCase
         DB::table('daily_message_likes')->insert([
             'daily_message_id' => $other->id, 'user_id' => $users[0]->id, 'created_at' => now(),
         ]);
-        $this->get('/admin/daily-messages/analytics')->assertOk()->assertSee('Message likes')
+        $this->get('/admin/daily-messages/analytics')->assertOk()->assertSee('Message analytics')
             ->assertSee('family_message')->assertSee('health_message');
         $this->get('/admin/daily-messages/analytics?category=health')->assertOk()
             ->assertSee('health_message')->assertDontSee('family_message');

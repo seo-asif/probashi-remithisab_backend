@@ -25,7 +25,15 @@ final class DailyMessagesController extends Controller
         $search = trim($filters['q'] ?? '');
         $status = $filters['status'] ?? 'all';
         $category = $filters['category'] ?? 'all';
-        $query = DailyMessage::query()->orderBy('sort_order')->orderBy('id');
+        $query = DailyMessage::query()
+            ->select('daily_messages.*')
+            ->selectSub(
+                DB::table('daily_message_likes')
+                    ->selectRaw('COUNT(*)')
+                    ->whereColumn('daily_message_likes.daily_message_id', 'daily_messages.id'),
+                'likes_count'
+            )
+            ->orderBy('sort_order')->orderBy('id');
 
         if ($status !== 'all') {
             $query->where('status', $status);
