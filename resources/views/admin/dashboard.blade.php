@@ -14,8 +14,10 @@
             <form class="ov3-period" method="GET" action="{{ route('admin.dashboard') }}" aria-label="Reporting period">
                 @foreach (['7' => '7 days', '30' => '30 days', '90' => '90 days'] as $value => $label)
                     <button name="period" value="{{ $value }}" type="submit"
-                        class="{{ $period === $value ? 'selected' : '' }}"
-                        aria-pressed="{{ $period === $value ? 'true' : 'false' }}">{{ $label }}</button>
+                        class="{{ (int) $period === (int) $value ? 'selected' : '' }}"
+                        aria-pressed="{{ (int) $period === (int) $value ? 'true' : 'false' }}">
+                        {{ $label }}
+                    </button>
                 @endforeach
             </form>
         </header>
@@ -115,7 +117,8 @@
                                 <span class="ov3-bar-count">{{ $entry['count'] }}</span><span class="ov3-bar-track"><span
                                         class="ov3-bar"
                                         style="height:{{ max(3, round((100 * $entry['count']) / $trendMax)) }}%"></span></span><span
-                                    class="ov3-bar-date">{{ $entry['label'] }}</span></div>
+                                    class="ov3-bar-date">{{ $entry['label'] }}</span>
+                            </div>
                         @endforeach
                     </div>
                 </section>
