@@ -84,7 +84,7 @@ class DashboardAccessTest extends TestCase
             'admin_mfa.user_id' => $user->id,
             'admin_mfa.last_activity' => time(),
         ])->get('/admin')->assertOk()
-            ->assertSee('Platform overview')
-            ->assertSee('Payment queue');
+            ->assertSee('Good to see you.')
+            ->assertSee('Needs your attention');
     }
 }
